@@ -516,12 +516,13 @@
     let ultimaQtdBoletosVencidos = 0;
 
     // =========================================================================
-    // SESSÃO LOCAL E TRAVA DE ABERTURA ÚNICA POR DIA
-    // Mantém login/caixa ao fechar a aba acidentalmente no mesmo navegador.
+    // MODO 100% GOOGLE SHEETS / SERVIDOR
     // =========================================================================
-    const CHAVE_LOGIN_PDV = "AMMO_PDV_LOGIN_ATIVO";
-    const CHAVE_CAIXA_PDV = "AMMO_PDV_CAIXA_DIA";
-    const CHAVE_VENDAS_DIA_PDV = "AMMO_PDV_VENDAS_DIA_FECHAMENTO";
+    // Correção importante:
+    // - Não usa localStorage para caixa, vendas, login ou fechamento.
+    // - Não cria sessão LOCAL fictícia.
+    // - Fechamento, sangria, despesa e vendas são puxados somente do Google Sheets
+    //   por meio do Apps Script configurado em URL_BASE_2_PRINCIPAL.
 
     function dataHojeISO() {
         const agora = new Date();
@@ -531,47 +532,44 @@
         return `${ano}-${mes}-${dia}`;
     }
 
-    function salvarLoginLocal(nomeColaborador, usuario) {
-        localStorage.setItem(CHAVE_LOGIN_PDV, JSON.stringify({
-            nome: nomeColaborador,
-            usuario: usuario || nomeColaborador,
-            data: dataHojeISO(),
-            salvoEm: new Date().toISOString()
-        }));
+    function salvarLoginLocal() {
+        // DESATIVADO: nenhum dado de login fica salvo no navegador.
     }
 
     function obterLoginLocal() {
-        try {
-            const dados = JSON.parse(localStorage.getItem(CHAVE_LOGIN_PDV) || "null");
-            if (!dados || dados.data !== dataHojeISO()) return null;
-            return dados;
-        } catch(e) { return null; }
+        // DESATIVADO: força login real e evita restaurar dados antigos/inexistentes.
+        return null;
     }
 
-    function salvarCaixaLocal(idSessao, operador, valorInicial) {
-        localStorage.setItem(CHAVE_CAIXA_PDV, JSON.stringify({
-            data: dataHojeISO(),
-            idSessao: idSessao || ("LOCAL-" + Date.now()),
-            operador: operador,
-            valorInicial: parseFloat(valorInicial || 0),
-            abertoEm: new Date().toISOString()
-        }));
+    function salvarCaixaLocal() {
+        // DESATIVADO: caixa só existe se estiver gravado no Google Sheets.
     }
 
     function obterCaixaLocalHoje() {
-        try {
-            const dados = JSON.parse(localStorage.getItem(CHAVE_CAIXA_PDV) || "null");
-            if (!dados || dados.data !== dataHojeISO()) return null;
-            return dados;
-        } catch(e) { return null; }
+        // DESATIVADO: não lê caixa do navegador.
+        return null;
     }
 
     function obterVendasLocaisDia() {
+        // DESATIVADO: fechamento não usa vendas salvas no navegador.
+        return [];
+    }
+
+    function limparArmazenamentoLocalAntigo() {
+        // Limpa versões antigas que gravavam caixa/vendas no navegador e causavam dados fantasmas.
         try {
-            const pacote = JSON.parse(localStorage.getItem(CHAVE_VENDAS_DIA_PDV) || "null");
-            if (!pacote || pacote.data !== dataHojeISO() || !Array.isArray(pacote.vendas)) return [];
-            return pacote.vendas;
-        } catch(e) { return []; }
+            const chavesParaRemover = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const chave = localStorage.key(i);
+                if (chave && (chave.startsWith('AMMO_PDV_') || chave.includes('PDV') || chave.includes('CAIXA'))) {
+                    chavesParaRemover.push(chave);
+                }
+            }
+            chavesParaRemover.forEach(chave => localStorage.removeItem(chave));
+            sessionStorage.clear();
+        } catch(e) {
+            console.warn('Não foi possível limpar armazenamento antigo.', e);
+        }
     }
 
     function gerarChaveVendaFechamento(v) {
@@ -597,7 +595,7 @@
                 return;
             }
 
-            // Se vier duplicado, preserva a versão com mais detalhes de pagamento.
+            // Se vier duplicado do próprio servidor/planilha, preserva a versão com mais detalhes.
             const atual = mapa.get(chave);
             const detalhesAtual = (atual.metodosDetalhados || atual.formasPagamentoDetalhadas || []).length;
             const detalhesNovo = (v.metodosDetalhados || v.formasPagamentoDetalhadas || []).length;
@@ -606,31 +604,8 @@
         return Array.from(mapa.values());
     }
 
-    function salvarVendaLocalFechamento(payload, metodosDetalhados) {
-        let vendas = obterVendasLocaisDia();
-        const registro = {
-            idVenda: payload.idVenda,
-            data: dataHojeISO(),
-            hora: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-            cliente: payload.nomeCliente || '-',
-            formaPagamento: payload.formaPagamento || '-',
-            valorTotalOriginal: tratarValor(payload.valorTotalOriginal || payload.valorTotal || 0),
-            valorPagoDia: tratarValor(payload.valorPagoDia || payload.valorPago || payload.valorTotal || 0),
-            valorBoleto: tratarValor(payload.valorBoleto || 0),
-            metodosDetalhados: (metodosDetalhados || []).map(m => ({
-                nome: m.nome,
-                valor: tratarValor(m.valor || 0),
-                categoria: identificarCategoriaMetodo(m.nome)
-            }))
-        };
-
-        // Remove qualquer lançamento local anterior da mesma venda antes de salvar novamente.
-        const chaveNova = gerarChaveVendaFechamento(registro);
-        vendas = vendas.filter(v => gerarChaveVendaFechamento(v) !== chaveNova);
-        vendas.push(registro);
-        vendas = deduplicarVendasFechamento(vendas);
-
-        localStorage.setItem(CHAVE_VENDAS_DIA_PDV, JSON.stringify({ data: dataHojeISO(), vendas }));
+    function salvarVendaLocalFechamento() {
+        // DESATIVADO: venda não é salva no navegador. O fechamento puxa somente do Google Sheets.
     }
 
     function identificarCategoriaMetodo(nome) {
@@ -645,42 +620,59 @@
         return 'outros';
     }
 
-    function restaurarCaixaLocalSeExistir() {
-        const caixa = obterCaixaLocalHoje();
-        if (!caixa) return false;
-        cxSessao = caixa.idSessao;
-        cxFundoInicial = parseFloat(caixa.valorInicial || 0);
+    function obterIdSessaoServidor(data) {
+        if (!data) return '';
+        return String(data.idSessao || data.idSessaoCaixa || data.sessao || data.caixaSessao || data.id || '').trim();
+    }
+
+    function caixaServidorEstaAberto(data) {
+        if (!data) return false;
+        const status = String(data.status || data.situacao || data.caixaStatus || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+        return data.caixaAberto === true || data.aberto === true || status.includes('ABERTO') || !!obterIdSessaoServidor(data);
+    }
+
+    function aplicarStatusCaixaServidor(data, operador) {
+        if (!caixaServidorEstaAberto(data)) return false;
+        const id = obterIdSessaoServidor(data);
+        if (!id) return false;
+        cxSessao = id;
+        cxFundoInicial = tratarValor(data.valorInicial || data.fundoInicial || data.abertura || data.valorAbertura || data.trocoInicial || 0);
         const sel = document.getElementById('vendedor-select');
-        if (sel && caixa.operador) sel.value = caixa.operador;
+        if (sel && operador) sel.value = operador;
         return true;
     }
 
+    async function buscarStatusCaixaServidor(operador) {
+        const resCx = await fetch(`${URL_BASE_2_PRINCIPAL}?tipo=status_caixa&vendedor=${encodeURIComponent(operador)}&nocache=${Date.now()}`);
+        const cxData = await resCx.json();
+        cxUltimoFechamento = tratarValor(cxData.ultimoFechamento || cxData.valorUltimoFechamento || 0);
+        return cxData;
+    }
+
+    function restaurarCaixaLocalSeExistir() {
+        // DESATIVADO: não restaura caixa do navegador.
+        return false;
+    }
+
     function sairSistema() {
-        localStorage.removeItem(CHAVE_LOGIN_PDV);
-        localStorage.removeItem(CHAVE_CAIXA_PDV);
-        sessionStorage.clear();
+        limparArmazenamentoLocalAntigo();
+        cxSessao = '';
+        cxFundoInicial = 0;
+        cxResumoAtual = null;
+        carrinho = [];
         location.reload();
     }
 
     function voltarTelaLoginAposFechamento() {
-        // Ao fechar o caixa, encerra completamente a sessão do operador.
-        // Isso impede que o sistema restaure login/caixa do localStorage e obriga novo login.
-        try {
-            localStorage.removeItem(CHAVE_LOGIN_PDV);
-            localStorage.removeItem(CHAVE_CAIXA_PDV);
-            sessionStorage.clear();
-        } catch(e) {
-            console.warn('Não foi possível limpar a sessão local.', e);
-        }
+        limparArmazenamentoLocalAntigo();
 
-        cxSessao = "";
+        cxSessao = '';
         cxFundoInicial = 0;
         cxResumoAtual = null;
         carrinho = [];
         bloqueioQuebraIgnorado = false;
-        adminAutorizador = "";
+        adminAutorizador = '';
 
-        // Recarrega a página já sem sessão salva, voltando direto para a tela de login.
         location.reload();
     }
 
@@ -795,23 +787,20 @@
                 document.getElementById('tela-loading').style.display = 'flex';
                 
                 await carregarDados();
-                
-                if (restaurarCaixaLocalSeExistir()) {
-                    document.getElementById('tela-loading').style.display = 'none';
-                    setTimeout(verificarBoletosVencidos, 600);
-                    return;
-                }
 
                 try {
-                    const resCx = await fetch(`${URL_BASE_2_PRINCIPAL}?tipo=status_caixa&vendedor=${encodeURIComponent(nomeColaborador)}`);
-                    const cxData = await resCx.json();
-                    cxUltimoFechamento = parseFloat(cxData.ultimoFechamento) || 0;
+                    const cxData = await buscarStatusCaixaServidor(nomeColaborador);
                     document.getElementById('tela-loading').style.display = 'none';
-                    abrirModalCaixa('abertura');
 
+                    if (aplicarStatusCaixaServidor(cxData, nomeColaborador)) {
+                        setTimeout(verificarBoletosVencidos, 600);
+                        return;
+                    }
+
+                    abrirModalCaixa('abertura');
                 } catch (e) {
                     document.getElementById('tela-loading').style.display = 'none';
-                    abrirModalCaixa('abertura'); 
+                    abrirModalCaixa('abertura');
                 }
             } else {
                 mostrarErroLogin(dataLogin.mensagem || "Credenciais inválidas!");
@@ -860,13 +849,10 @@
     // FUNÇÕES DO CAIXA E VALIDAÇÃO MASTER
     // =========================================================================
     function abrirModalCaixa(tipo) {
-        const caixaHoje = obterCaixaLocalHoje();
-        if (tipo === 'abertura' && caixaHoje) {
-            cxSessao = caixaHoje.idSessao;
-            cxFundoInicial = parseFloat(caixaHoje.valorInicial || 0);
-            alert(`Caixa já aberto hoje por ${caixaHoje.operador || 'operador'} às ${new Date(caixaHoje.abertoEm).toLocaleTimeString('pt-BR')}.
+        limparArmazenamentoLocalAntigo();
 
-Por segurança, a abertura só pode ser feita 1 vez por dia. A sessão foi restaurada.`);
+        if (tipo === 'abertura' && cxSessao) {
+            alert('Caixa já está aberto no Google Sheets para esta sessão. Não será criada nova abertura.');
             return;
         }
 
@@ -921,20 +907,30 @@ Por segurança, a abertura só pode ser feita 1 vez por dia. A sessão foi resta
 
         try {
             if(tipoOperacaoAtual === 'abertura') {
-                const caixaHoje = obterCaixaLocalHoje();
-                if (caixaHoje) {
-                    cxSessao = caixaHoje.idSessao;
-                    cxFundoInicial = parseFloat(caixaHoje.valorInicial || 0);
-                    alert("Este caixa já foi aberto hoje. A sessão anterior foi restaurada e uma nova abertura foi bloqueada.");
+                const statusAtual = await buscarStatusCaixaServidor(operador).catch(() => null);
+                if (aplicarStatusCaixaServidor(statusAtual, operador)) {
+                    alert('Já existe caixa aberto no Google Sheets para este operador. A sessão do servidor foi carregada.');
                     document.getElementById('modal-operacao-caixa').style.display = 'none';
                     return;
                 }
+
                 const payload = { tipo: 'abrir_caixa', vendedor: operador, valorInicial: valor, travaDiaria: true, dataAbertura: dataHojeISO() }; 
                 const res = await enviarDadosServidor(payload); 
                 const data = await res.json(); 
-                cxSessao = data.idSessao || ("LOCAL-" + Date.now()); 
+
+                if (data.status === 'Erro' || data.status === 'erro' || data.erro) {
+                    alert(data.mensagem || data.erro || 'Erro ao abrir caixa no Google Sheets.');
+                    return;
+                }
+
+                const idServidor = obterIdSessaoServidor(data);
+                if (!idServidor) {
+                    alert('O caixa foi enviado ao Google Sheets, mas o servidor não retornou o ID da sessão. Verifique o Apps Script para retornar idSessao.');
+                    return;
+                }
+
+                cxSessao = idServidor; 
                 cxFundoInicial = valor;
-                salvarCaixaLocal(cxSessao, operador, valor);
                 imprimirComprovanteSeguro("ABERTURA DE CAIXA", valor, desc, operador);
                 setTimeout(verificarBoletosVencidos, 900);
             } else if (tipoOperacaoAtual === 'sangria' || tipoOperacaoAtual === 'despesa') {
@@ -944,9 +940,37 @@ Por segurança, a abertura só pode ser feita 1 vez por dia. A sessão foi resta
                     btn.disabled = false; 
                     return; 
                 }
-                const prefixo = tipoOperacaoAtual === 'sangria' ? "[SANGRIA] " : "[DESPESA] "; 
-                const payloadDespesa = { tipo: 'lancar_despesa', vendedor: operador, descricao: prefixo + desc, valor: valor, idSessaoCaixa: cxSessao };
-                await enviarDadosServidor(payloadDespesa); 
+                const ehSangria = tipoOperacaoAtual === 'sangria';
+                const prefixo = ehSangria ? "[SANGRIA] " : "[DESPESA] "; 
+                const payloadDespesa = {
+                    tipo: ehSangria ? 'lancar_sangria' : 'lancar_despesa',
+                    acao: ehSangria ? 'lancar_sangria' : 'lancar_despesa',
+                    tipoMovimento: ehSangria ? 'SANGRIA' : 'DESPESA',
+                    vendedor: operador,
+                    operador: operador,
+                    descricao: prefixo + desc,
+                    desc: prefixo + desc,
+                    valor: valor,
+                    idSessao: cxSessao,
+                    idSessaoCaixa: cxSessao,
+                    dataMovimento: dataHojeISO()
+                };
+                let resMov = await enviarDadosServidor(payloadDespesa);
+                let dataMov = await resMov.json().catch(() => ({}));
+
+                // Compatibilidade com Apps Script antigo:
+                // se o backend ainda não tiver 'lancar_sangria', tenta gravar como 'lancar_despesa'
+                // mantendo os campos categoria/tipoMovimento como SANGRIA.
+                if (ehSangria && (dataMov.status === 'Erro' || dataMov.status === 'erro' || dataMov.erro || dataMov.sucesso === false)) {
+                    const payloadCompat = { ...payloadDespesa, tipo: 'lancar_despesa', acao: 'lancar_despesa', categoria: 'SANGRIA', tipoMovimento: 'SANGRIA' };
+                    resMov = await enviarDadosServidor(payloadCompat);
+                    dataMov = await resMov.json().catch(() => ({}));
+                }
+
+                if (dataMov.status === 'Erro' || dataMov.status === 'erro' || dataMov.erro || dataMov.sucesso === false) {
+                    alert(dataMov.mensagem || dataMov.erro || 'Erro ao gravar movimentação no Google Sheets.');
+                    return;
+                }
                 imprimirComprovanteSeguro(tipoOperacaoAtual.toUpperCase(), valor, desc, operador);
             }
             document.getElementById('modal-operacao-caixa').style.display = 'none';
@@ -1118,9 +1142,8 @@ Por segurança, a abertura só pode ser feita 1 vez por dia. A sessão foi resta
     }
 
     function calcularResumoPagamentosFechamento() {
-        const vendasServidor = deduplicarVendasFechamento(obterListaVendasResumo());
-        const vendasLocais = deduplicarVendasFechamento(obterVendasLocaisDia());
-        const vendas = deduplicarVendasFechamento(vendasServidor.length > 0 ? vendasServidor : vendasLocais);
+        // Somente Google Sheets/servidor. Não existe fallback local.
+        const vendas = deduplicarVendasFechamento(obterListaVendasResumo());
         const resumo = {
             dinheiro: 0,
             pix: 0,
@@ -2416,7 +2439,7 @@ document.getElementById('modal-fechamento').style.display = 'flex';
                 alert("Operação registrada no servidor com sucesso!"); 
             } 
             
-            salvarVendaLocalFechamento(payload, metodosDetalhados);
+            // Não salva venda no navegador. O fechamento será montado somente com dados do Google Sheets.
             liberacaoBoletoEntrada = false;
             motivoLiberacaoBoleto = '';
             setTimeout(() => { resetarPDV(); }, 1500);
@@ -2715,24 +2738,9 @@ document.getElementById('modal-fechamento').style.display = 'flex';
         btn.disabled = false;
     }
 
-    // Restaura o acesso se o operador fechou a aba por acidente no mesmo dia.
-    document.addEventListener('DOMContentLoaded', async function() {
-        const loginSalvo = obterLoginLocal();
-        if (!loginSalvo) return;
-        try {
-            document.getElementById('tela-login').style.display = 'none';
-            document.getElementById('tela-loading').style.display = 'flex';
-            document.getElementById('login-user').value = loginSalvo.nome;
-            await carregarDados();
-            const sel = document.getElementById('vendedor-select');
-            if (sel && loginSalvo.nome) sel.value = loginSalvo.nome;
-            const caixaRestaurado = restaurarCaixaLocalSeExistir();
-            document.getElementById('tela-loading').style.display = 'none';
-            if (caixaRestaurado) setTimeout(verificarBoletosVencidos, 600);
-        } catch(e) {
-            document.getElementById('tela-loading').style.display = 'none';
-            document.getElementById('tela-login').style.display = 'flex';
-        }
+    // Limpa dados antigos de versões anteriores. Não restaura login, caixa ou vendas do navegador.
+    document.addEventListener('DOMContentLoaded', function() {
+        limparArmazenamentoLocalAntigo();
     });
 
           setInterval(() => { if (cxSessao) verificarBoletosVencidos(false); }, 5 * 60 * 1000);
