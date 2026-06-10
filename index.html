@@ -465,7 +465,6 @@
                 <div class="mp-grid-pagos">
                     <div class="mp-grid-title"><i class="fas fa-print"></i> Opções de Impressão</div>
                     <div style="padding:10px 15px; font-size:12px; color: #475569; display:flex; flex-direction:column; gap:8px;">
-                        <!-- Removido 'Imprimir Recibo PDV' conforme solicitado -->
                         <label style="cursor:pointer; font-weight:600; color:var(--blue-header); display:flex; align-items:center; gap:6px;"><input type="checkbox" id="chk-imprimir-nfce" checked style="width:16px; height:16px; accent-color: var(--blue-header);"> Emitir Cupom Fiscal (NFC-e)</label>
                     </div>
                 </div>
@@ -490,7 +489,7 @@
     // 1. DEFINA AQUI AS URLs DO SEU GOOGLE APPS SCRIPT (WEB APP)
     // =========================================================================
     const URL_BASE_2_PRINCIPAL = "https://script.google.com/macros/s/AKfycbx3Bcw20Lh4sKYBWyrXC7U9qqijP7utW-cXFexaDpxF2Mla66yLe-vp_vKx9kp7nwRRSw/exec";
-    const LOGO_EMPRESA_URL = "https://i.postimg.cc/nz9k8v8n/Untitled-design-%282%29.png"; 
+    const LOGO_EMPRESA_URL = "https://i.postimg.cc/nz9k8v8n/Untitled-design-%282%29.png";
     // --- VARIÁVEIS DA SENHA MASTER E CONTROLES ---
     // Defina as senhas e quem é o dono de cada senha.
     const SENHAS_MASTER = {
@@ -500,7 +499,6 @@
     }; 
     
     let adminAutorizador = ""; 
-    let bloqueioTempoIgnorado = false;
     let bloqueioQuebraIgnorado = false;
     let liberacaoBoletoEntrada = false;
     let motivoLiberacaoBoleto = "";
@@ -518,12 +516,13 @@
     let ultimaQtdBoletosVencidos = 0;
 
     // =========================================================================
-    // SESSÃO LOCAL E TRAVA DE ABERTURA ÚNICA POR DIA
-    // Mantém login/caixa ao fechar a aba acidentalmente no mesmo navegador.
+    // MODO 100% GOOGLE SHEETS / SERVIDOR
     // =========================================================================
-    const CHAVE_LOGIN_PDV = "AMMO_PDV_LOGIN_ATIVO";
-    const CHAVE_CAIXA_PDV = "AMMO_PDV_CAIXA_DIA";
-    const CHAVE_VENDAS_DIA_PDV = "AMMO_PDV_VENDAS_DIA_FECHAMENTO";
+    // Correção importante:
+    // - Não usa localStorage para caixa, vendas, login ou fechamento.
+    // - Não cria sessão LOCAL fictícia.
+    // - Fechamento, sangria, despesa e vendas são puxados somente do Google Sheets
+    //   por meio do Apps Script configurado em URL_BASE_2_PRINCIPAL.
 
     function dataHojeISO() {
         const agora = new Date();
@@ -533,68 +532,181 @@
         return `${ano}-${mes}-${dia}`;
     }
 
-    function salvarLoginLocal(nomeColaborador, usuario) {
-        localStorage.setItem(CHAVE_LOGIN_PDV, JSON.stringify({
-            nome: nomeColaborador,
-            usuario: usuario || nomeColaborador,
-            data: dataHojeISO(),
-            salvoEm: new Date().toISOString()
-        }));
+    function salvarLoginLocal() {
+        // DESATIVADO: nenhum dado de login fica salvo no navegador.
     }
 
     function obterLoginLocal() {
-        try {
-            const dados = JSON.parse(localStorage.getItem(CHAVE_LOGIN_PDV) || "null");
-            if (!dados || dados.data !== dataHojeISO()) return null;
-            return dados;
-        } catch(e) { return null; }
+        // DESATIVADO: força login real e evita restaurar dados antigos/inexistentes.
+        return null;
     }
 
-    function salvarCaixaLocal(idSessao, operador, valorInicial) {
-        localStorage.setItem(CHAVE_CAIXA_PDV, JSON.stringify({
-            data: dataHojeISO(),
-            idSessao: idSessao || ("LOCAL-" + Date.now()),
-            operador: operador,
-            valorInicial: parseFloat(valorInicial || 0),
-            abertoEm: new Date().toISOString()
-        }));
+    function salvarCaixaLocal() {
+        // DESATIVADO: caixa só existe se estiver gravado no Google Sheets.
     }
 
     function obterCaixaLocalHoje() {
-        try {
-            const dados = JSON.parse(localStorage.getItem(CHAVE_CAIXA_PDV) || "null");
-            if (!dados || dados.data !== dataHojeISO()) return null;
-            return dados;
-        } catch(e) { return null; }
+        // DESATIVADO: não lê caixa do navegador.
+        return null;
     }
 
     function obterVendasLocaisDia() {
-        try {
-            const pacote = JSON.parse(localStorage.getItem(CHAVE_VENDAS_DIA_PDV) || "null");
-            if (!pacote || pacote.data !== dataHojeISO() || !Array.isArray(pacote.vendas)) return [];
-            return pacote.vendas;
-        } catch(e) { return []; }
+        // DESATIVADO: fechamento não usa vendas salvas no navegador.
+        return [];
     }
 
-    function salvarVendaLocalFechamento(payload, metodosDetalhados) {
-        const vendas = obterVendasLocaisDia();
-        const registro = {
-            idVenda: payload.idVenda,
-            data: dataHojeISO(),
-            hora: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-            cliente: payload.nomeCliente || '-',
-            formaPagamento: payload.formaPagamento || '-',
-            valorTotalOriginal: tratarValor(payload.valorTotalOriginal || payload.valorTotal || 0),
-            valorPagoDia: tratarValor(payload.valorPagoDia || payload.valorPago || payload.valorTotal || 0),
-            valorBoleto: tratarValor(payload.valorBoleto || 0),
-            metodosDetalhados: (metodosDetalhados || []).map(m => ({
-                nome: m.nome,
-                valor: tratarValor(m.valor || 0),
-                categoria: identificarCategoriaMetodo(m.nome)
-            }))
-        };
-        vendas.push(registro);
-        localStorage.setItem(CHAVE_VENDAS_DIA_PDV, JSON.stringify({ data: dataHojeISO(), vendas }));
+    function limparArmazenamentoLocalAntigo() {
+        // Limpa versões antigas que gravavam caixa/vendas no navegador e causavam dados fantasmas.
+        try {
+            const chavesParaRemover = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const chave = localStorage.key(i);
+                if (chave && (chave.startsWith('AMMO_PDV_') || chave.includes('PDV') || chave.includes('CAIXA'))) {
+                    chavesParaRemover.push(chave);
+                }
+            }
+            chavesParaRemover.forEach(chave => localStorage.removeItem(chave));
+            sessionStorage.clear();
+        } catch(e) {
+            console.warn('Não foi possível limpar armazenamento antigo.', e);
+        }
+    }
+
+    function normalizarTextoFechamento(valor) {
+        return String(valor || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
+    }
+
+    function obterCampoTexto(obj, chaves) {
+        if (!obj) return '';
+        for (const chave of chaves) {
+            if (obj[chave] !== undefined && obj[chave] !== null && String(obj[chave]).trim() !== '') return String(obj[chave]).trim();
+        }
+        return '';
+    }
+
+    function obterIdVendaServidor(v) {
+        return obterCampoTexto(v, [
+            'idVenda','id_venda','id','numeroVenda','nVenda','codigoVenda','codVenda','vendaId','idPedido','idOriginal','pedido'
+        ]);
+    }
+
+    function gerarChaveVendaFechamento(v, indice) {
+        // Chave única para impedir venda duplicada no fechamento.
+        // Se o Google Sheets retornar o ID da venda, ele é a fonte principal.
+        const id = obterIdVendaServidor(v);
+        if (id) return 'ID:' + id;
+
+        // Sem ID, usa uma assinatura estável SEM a forma de pagamento.
+        // Isso permite juntar uma mesma venda que veio separada em linhas de PIX/Crédito/Débito.
+        const cliente = normalizarTextoFechamento(v.cliente || v.nomeCliente || v.nome || '-');
+        const total = obterNumeroResumo(v, ['valorTotalOriginal','totalVenda','valorTotal','total','subtotal']).toFixed(2);
+        const horaBruta = obterCampoTexto(v, ['dataHora','data','hora','timestamp','criadoEm']);
+        const horaNormalizada = horaBruta.replace(/:\d{2}(\.\d+)?$/, '');
+        return ['SEMID', horaNormalizada, cliente, total].join('|') || ('LINHA-' + indice);
+    }
+
+    function criarDetalhePagamentoDaLinha(v) {
+        const forma = obterCampoTexto(v, ['formaPagamento','formaPgto','pagamento','metodo','forma','desc','descricao']);
+        const categoria = identificarCategoriaMetodo(forma || v.categoria || v.tipoPagamento || '');
+        let valor = obterNumeroResumo(v, ['valorPagoDia','valorPago','recebido','valorRecebido','valorMetodo','valorForma','valorPagamento','valor']);
+        const totalVenda = obterNumeroResumo(v, ['valorTotalOriginal','totalVenda','valorTotal','total','subtotal']);
+        const valorBoleto = obterNumeroResumo(v, ['valorBoleto','boleto']);
+
+        // Quando a linha é da venda inteira, mas tem boleto separado, não deixa o boleto somar duas vezes.
+        if (valorBoleto > 0 && categoria !== 'boleto' && valor >= totalVenda && totalVenda > 0) {
+            valor = Math.max(0, valor - valorBoleto);
+        }
+        if (!valor && totalVenda && categoria !== 'outros') valor = totalVenda;
+        // Se veio como texto misto, exemplo "Dinheiro + PIX", não cria detalhe único.
+        // A função de soma vai ratear somente quando o Apps Script não devolver detalhes por forma.
+        if (forma.includes('+')) return null;
+        if (!forma && !valor) return null;
+        return { nome: forma || categoria || 'Pagamento', valor: tratarValor(valor), categoria };
+    }
+
+    function detalhesPagamentoDaVenda(v) {
+        const arrays = [];
+        if (Array.isArray(v.metodosDetalhados)) arrays.push(...v.metodosDetalhados);
+        if (Array.isArray(v.formasPagamentoDetalhadas)) arrays.push(...v.formasPagamentoDetalhadas);
+        if (Array.isArray(v.pagamentosDetalhados)) arrays.push(...v.pagamentosDetalhados);
+        if (Array.isArray(v.pagamentos)) arrays.push(...v.pagamentos);
+
+        const detalhes = arrays.map(m => ({
+            nome: obterCampoTexto(m, ['nome','formaPagamento','formaPgto','pagamento','metodo','forma','desc','descricao','tipo']) || 'Pagamento',
+            valor: obterNumeroResumo(m, ['valor','valorPago','valorRecebido','recebido','total']),
+            categoria: m.categoria || identificarCategoriaMetodo(m.nome || m.formaPagamento || m.formaPgto || m.pagamento || m.metodo || m.forma || m.desc || m.descricao || m.tipo || '')
+        })).filter(m => tratarValor(m.valor) > 0);
+
+        if (!detalhes.length) {
+            const detalheLinha = criarDetalhePagamentoDaLinha(v);
+            if (detalheLinha && tratarValor(detalheLinha.valor) > 0) detalhes.push(detalheLinha);
+        }
+        return detalhes;
+    }
+
+    function chaveDetalhePagamento(m) {
+        return [
+            normalizarTextoFechamento(m.categoria || identificarCategoriaMetodo(m.nome)),
+            normalizarTextoFechamento(m.nome || m.forma || m.metodo || ''),
+            tratarValor(m.valor || 0).toFixed(2)
+        ].join('|');
+    }
+
+    function consolidarVendasFechamento(lista) {
+        const mapa = new Map();
+        (lista || []).forEach((v, indice) => {
+            if (!v) return;
+
+            // Se o Apps Script devolver idSessao na venda, aceita apenas a sessão atual.
+            // Se não devolver, não bloqueia, mas continua sem usar localStorage.
+            const sessaoVenda = obterCampoTexto(v, ['idSessao','idSessaoCaixa','sessao','caixaSessao']);
+            if (cxSessao && sessaoVenda && sessaoVenda !== cxSessao) return;
+
+            const chave = gerarChaveVendaFechamento(v, indice);
+            if (!mapa.has(chave)) {
+                mapa.set(chave, {
+                    ...v,
+                    _detalhesConsolidados: [],
+                    _detalhesChaves: new Set(),
+                    _linhasOrigem: 0
+                });
+            }
+
+            const atual = mapa.get(chave);
+            atual._linhasOrigem += 1;
+
+            // Preserva dados mais completos da venda.
+            ['hora','dataHora','data','cliente','nomeCliente','nome','formaPagamento','formaPgto','pagamento','valorTotalOriginal','totalVenda','valorTotal','total','subtotal','valorPagoDia','valorPago','recebido','valorRecebido'].forEach(c => {
+                if ((atual[c] === undefined || atual[c] === null || atual[c] === '') && v[c] !== undefined && v[c] !== null && v[c] !== '') atual[c] = v[c];
+            });
+
+            detalhesPagamentoDaVenda(v).forEach(m => {
+                const detalhe = {
+                    nome: m.nome || m.forma || m.metodo || 'Pagamento',
+                    valor: tratarValor(m.valor || 0),
+                    categoria: m.categoria || identificarCategoriaMetodo(m.nome || m.forma || m.metodo || '')
+                };
+                const chaveDet = chaveDetalhePagamento(detalhe);
+                if (!atual._detalhesChaves.has(chaveDet)) {
+                    atual._detalhesChaves.add(chaveDet);
+                    atual._detalhesConsolidados.push(detalhe);
+                }
+            });
+        });
+
+        return Array.from(mapa.values()).map(v => {
+            delete v._detalhesChaves;
+            return v;
+        });
+    }
+
+    function deduplicarVendasFechamento(lista) {
+        // Mantida para compatibilidade: agora consolida pagamentos da mesma venda em vez de descartar linhas.
+        return consolidarVendasFechamento(lista);
+    }
+
+    function salvarVendaLocalFechamento() {
+        // DESATIVADO: venda não é salva no navegador. O fechamento puxa somente do Google Sheets.
     }
 
     function identificarCategoriaMetodo(nome) {
@@ -609,43 +721,59 @@
         return 'outros';
     }
 
-    function restaurarCaixaLocalSeExistir() {
-        const caixa = obterCaixaLocalHoje();
-        if (!caixa) return false;
-        cxSessao = caixa.idSessao;
-        cxFundoInicial = parseFloat(caixa.valorInicial || 0);
+    function obterIdSessaoServidor(data) {
+        if (!data) return '';
+        return String(data.idSessao || data.idSessaoCaixa || data.sessao || data.caixaSessao || data.id || '').trim();
+    }
+
+    function caixaServidorEstaAberto(data) {
+        if (!data) return false;
+        const status = String(data.status || data.situacao || data.caixaStatus || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+        return data.caixaAberto === true || data.aberto === true || status.includes('ABERTO') || !!obterIdSessaoServidor(data);
+    }
+
+    function aplicarStatusCaixaServidor(data, operador) {
+        if (!caixaServidorEstaAberto(data)) return false;
+        const id = obterIdSessaoServidor(data);
+        if (!id) return false;
+        cxSessao = id;
+        cxFundoInicial = tratarValor(data.valorInicial || data.fundoInicial || data.abertura || data.valorAbertura || data.trocoInicial || 0);
         const sel = document.getElementById('vendedor-select');
-        if (sel && caixa.operador) sel.value = caixa.operador;
+        if (sel && operador) sel.value = operador;
         return true;
     }
 
+    async function buscarStatusCaixaServidor(operador) {
+        const resCx = await fetch(`${URL_BASE_2_PRINCIPAL}?tipo=status_caixa&vendedor=${encodeURIComponent(operador)}&nocache=${Date.now()}`);
+        const cxData = await resCx.json();
+        cxUltimoFechamento = tratarValor(cxData.ultimoFechamento || cxData.valorUltimoFechamento || 0);
+        return cxData;
+    }
+
+    function restaurarCaixaLocalSeExistir() {
+        // DESATIVADO: não restaura caixa do navegador.
+        return false;
+    }
+
     function sairSistema() {
-        localStorage.removeItem(CHAVE_LOGIN_PDV);
-        localStorage.removeItem(CHAVE_CAIXA_PDV);
-        sessionStorage.clear();
+        limparArmazenamentoLocalAntigo();
+        cxSessao = '';
+        cxFundoInicial = 0;
+        cxResumoAtual = null;
+        carrinho = [];
         location.reload();
     }
 
     function voltarTelaLoginAposFechamento() {
-        // Ao fechar o caixa, encerra completamente a sessão do operador.
-        // Isso impede que o sistema restaure login/caixa do localStorage e obriga novo login.
-        try {
-            localStorage.removeItem(CHAVE_LOGIN_PDV);
-            localStorage.removeItem(CHAVE_CAIXA_PDV);
-            sessionStorage.clear();
-        } catch(e) {
-            console.warn('Não foi possível limpar a sessão local.', e);
-        }
+        limparArmazenamentoLocalAntigo();
 
-        cxSessao = "";
+        cxSessao = '';
         cxFundoInicial = 0;
         cxResumoAtual = null;
         carrinho = [];
         bloqueioQuebraIgnorado = false;
-        bloqueioTempoIgnorado = false;
-        adminAutorizador = "";
+        adminAutorizador = '';
 
-        // Recarrega a página já sem sessão salva, voltando direto para a tela de login.
         location.reload();
     }
 
@@ -760,23 +888,20 @@
                 document.getElementById('tela-loading').style.display = 'flex';
                 
                 await carregarDados();
-                
-                if (restaurarCaixaLocalSeExistir()) {
-                    document.getElementById('tela-loading').style.display = 'none';
-                    setTimeout(verificarBoletosVencidos, 600);
-                    return;
-                }
 
                 try {
-                    const resCx = await fetch(`${URL_BASE_2_PRINCIPAL}?tipo=status_caixa&vendedor=${encodeURIComponent(nomeColaborador)}`);
-                    const cxData = await resCx.json();
-                    cxUltimoFechamento = parseFloat(cxData.ultimoFechamento) || 0;
+                    const cxData = await buscarStatusCaixaServidor(nomeColaborador);
                     document.getElementById('tela-loading').style.display = 'none';
-                    abrirModalCaixa('abertura');
 
+                    if (aplicarStatusCaixaServidor(cxData, nomeColaborador)) {
+                        setTimeout(verificarBoletosVencidos, 600);
+                        return;
+                    }
+
+                    abrirModalCaixa('abertura');
                 } catch (e) {
                     document.getElementById('tela-loading').style.display = 'none';
-                    abrirModalCaixa('abertura'); 
+                    abrirModalCaixa('abertura');
                 }
             } else {
                 mostrarErroLogin(dataLogin.mensagem || "Credenciais inválidas!");
@@ -825,13 +950,10 @@
     // FUNÇÕES DO CAIXA E VALIDAÇÃO MASTER
     // =========================================================================
     function abrirModalCaixa(tipo) {
-        const caixaHoje = obterCaixaLocalHoje();
-        if (tipo === 'abertura' && caixaHoje) {
-            cxSessao = caixaHoje.idSessao;
-            cxFundoInicial = parseFloat(caixaHoje.valorInicial || 0);
-            alert(`Caixa já aberto hoje por ${caixaHoje.operador || 'operador'} às ${new Date(caixaHoje.abertoEm).toLocaleTimeString('pt-BR')}.
+        limparArmazenamentoLocalAntigo();
 
-Por segurança, a abertura só pode ser feita 1 vez por dia. A sessão foi restaurada.`);
+        if (tipo === 'abertura' && cxSessao) {
+            alert('Caixa já está aberto no Google Sheets para esta sessão. Não será criada nova abertura.');
             return;
         }
 
@@ -886,20 +1008,30 @@ Por segurança, a abertura só pode ser feita 1 vez por dia. A sessão foi resta
 
         try {
             if(tipoOperacaoAtual === 'abertura') {
-                const caixaHoje = obterCaixaLocalHoje();
-                if (caixaHoje) {
-                    cxSessao = caixaHoje.idSessao;
-                    cxFundoInicial = parseFloat(caixaHoje.valorInicial || 0);
-                    alert("Este caixa já foi aberto hoje. A sessão anterior foi restaurada e uma nova abertura foi bloqueada.");
+                const statusAtual = await buscarStatusCaixaServidor(operador).catch(() => null);
+                if (aplicarStatusCaixaServidor(statusAtual, operador)) {
+                    alert('Já existe caixa aberto no Google Sheets para este operador. A sessão do servidor foi carregada.');
                     document.getElementById('modal-operacao-caixa').style.display = 'none';
                     return;
                 }
+
                 const payload = { tipo: 'abrir_caixa', vendedor: operador, valorInicial: valor, travaDiaria: true, dataAbertura: dataHojeISO() }; 
                 const res = await enviarDadosServidor(payload); 
                 const data = await res.json(); 
-                cxSessao = data.idSessao || ("LOCAL-" + Date.now()); 
+
+                if (data.status === 'Erro' || data.status === 'erro' || data.erro) {
+                    alert(data.mensagem || data.erro || 'Erro ao abrir caixa no Google Sheets.');
+                    return;
+                }
+
+                const idServidor = obterIdSessaoServidor(data);
+                if (!idServidor) {
+                    alert('O caixa foi enviado ao Google Sheets, mas o servidor não retornou o ID da sessão. Verifique o Apps Script para retornar idSessao.');
+                    return;
+                }
+
+                cxSessao = idServidor; 
                 cxFundoInicial = valor;
-                salvarCaixaLocal(cxSessao, operador, valor);
                 imprimirComprovanteSeguro("ABERTURA DE CAIXA", valor, desc, operador);
                 setTimeout(verificarBoletosVencidos, 900);
             } else if (tipoOperacaoAtual === 'sangria' || tipoOperacaoAtual === 'despesa') {
@@ -909,9 +1041,37 @@ Por segurança, a abertura só pode ser feita 1 vez por dia. A sessão foi resta
                     btn.disabled = false; 
                     return; 
                 }
-                const prefixo = tipoOperacaoAtual === 'sangria' ? "[SANGRIA] " : "[DESPESA] "; 
-                const payloadDespesa = { tipo: 'lancar_despesa', vendedor: operador, descricao: prefixo + desc, valor: valor, idSessaoCaixa: cxSessao };
-                await enviarDadosServidor(payloadDespesa); 
+                const ehSangria = tipoOperacaoAtual === 'sangria';
+                const prefixo = ehSangria ? "[SANGRIA] " : "[DESPESA] "; 
+                const payloadDespesa = {
+                    tipo: ehSangria ? 'lancar_sangria' : 'lancar_despesa',
+                    acao: ehSangria ? 'lancar_sangria' : 'lancar_despesa',
+                    tipoMovimento: ehSangria ? 'SANGRIA' : 'DESPESA',
+                    vendedor: operador,
+                    operador: operador,
+                    descricao: prefixo + desc,
+                    desc: prefixo + desc,
+                    valor: valor,
+                    idSessao: cxSessao,
+                    idSessaoCaixa: cxSessao,
+                    dataMovimento: dataHojeISO()
+                };
+                let resMov = await enviarDadosServidor(payloadDespesa);
+                let dataMov = await resMov.json().catch(() => ({}));
+
+                // Compatibilidade com Apps Script antigo:
+                // se o backend ainda não tiver 'lancar_sangria', tenta gravar como 'lancar_despesa'
+                // mantendo os campos categoria/tipoMovimento como SANGRIA.
+                if (ehSangria && (dataMov.status === 'Erro' || dataMov.status === 'erro' || dataMov.erro || dataMov.sucesso === false)) {
+                    const payloadCompat = { ...payloadDespesa, tipo: 'lancar_despesa', acao: 'lancar_despesa', categoria: 'SANGRIA', tipoMovimento: 'SANGRIA' };
+                    resMov = await enviarDadosServidor(payloadCompat);
+                    dataMov = await resMov.json().catch(() => ({}));
+                }
+
+                if (dataMov.status === 'Erro' || dataMov.status === 'erro' || dataMov.erro || dataMov.sucesso === false) {
+                    alert(dataMov.mensagem || dataMov.erro || 'Erro ao gravar movimentação no Google Sheets.');
+                    return;
+                }
                 imprimirComprovanteSeguro(tipoOperacaoAtual.toUpperCase(), valor, desc, operador);
             }
             document.getElementById('modal-operacao-caixa').style.display = 'none';
@@ -930,7 +1090,14 @@ Por segurança, a abertura só pode ser feita 1 vez por dia. A sessão foi resta
         
         const operador = document.getElementById('vendedor-select').value || document.getElementById('login-user').value;
         try {
-            const res = await fetch(`${URL_BASE_2_PRINCIPAL}?tipo=resumo_caixa&vendedor=${encodeURIComponent(operador)}&idSessao=${cxSessao}&nocache=${Date.now()}`); 
+            const statusAtual = await buscarStatusCaixaServidor(operador).catch(() => null);
+            aplicarStatusCaixaServidor(statusAtual, operador);
+            if (!cxSessao) {
+                alert('Não encontrei uma sessão de caixa aberta no Google Sheets para este operador. Abra o caixa novamente pelo sistema para o fechamento puxar apenas dados reais da planilha.');
+                document.getElementById('fech-diferenca').innerText = 'Sem sessão aberta no Google Sheets.';
+                return;
+            }
+            const res = await fetch(`${URL_BASE_2_PRINCIPAL}?tipo=resumo_caixa&vendedor=${encodeURIComponent(operador)}&idSessao=${encodeURIComponent(cxSessao)}&somenteSessao=true&nocache=${Date.now()}`); 
             const data = await res.json(); 
             tbody.innerHTML = "";
             
@@ -956,10 +1123,7 @@ Por segurança, a abertura só pode ser feita 1 vez por dia. A sessão foi resta
             adminAutorizador = SENHAS_MASTER[senhaInserida]; 
             document.getElementById('modal-auth-master').style.display = 'none';
             
-            if (motivoBloqueioAtual === 'horario') { 
-                bloqueioTempoIgnorado = true; 
-                abrirModalFechamento(); 
-            } else if (motivoBloqueioAtual === 'quebra') { 
+            if (motivoBloqueioAtual === 'quebra') { 
                 bloqueioQuebraIgnorado = true; 
                 confirmarFechamentoDefinitivo(); 
             } else if (motivoBloqueioAtual === 'boleto_entrada') {
@@ -976,10 +1140,28 @@ Por segurança, a abertura só pode ser feita 1 vez por dia. A sessão foi resta
 
 
     // =========================================================================
-    // RESUMO DO FECHAMENTO POR FORMA DE PAGAMENTO
-    // Corrige a conferência: dinheiro, pix, cartão, boleto e vendas do dia.
-    // O caixa em dinheiro continua considerando somente dinheiro na gaveta.
+    // RESUMO DO FECHAMENTO POR FORMA DE PAGAMENTO E SAÍDAS AUTOMÁTICAS
     // =========================================================================
+    
+    // Função auxiliar para consolidar todas as saídas lidas das movimentações
+    function calcularTotalSaidas(resumo) {
+        if (!resumo) return 0;
+        let saidasMovimentos = 0;
+        if (Array.isArray(resumo.movimentacoes)) {
+            resumo.movimentacoes.forEach(m => {
+                const tipoMov = String(m.tipo || '').toUpperCase();
+                const descMov = String(m.desc || m.descricao || '').toUpperCase();
+                // Soma tudo que for caracterizado como retirada do caixa
+                if (tipoMov.includes('SAÍDA') || tipoMov.includes('SAIDA') || tipoMov.includes('DESPESA') || tipoMov.includes('SANGRIA') || descMov.includes('[SANGRIA]') || descMov.includes('[DESPESA]')) {
+                    saidasMovimentos += tratarValor(m.valor || m.total || 0);
+                }
+            });
+        }
+        // Usa o maior valor entre o calculado ou o passado solto pelo servidor
+        const saidasObjeto = tratarValor(resumo.despesas) + tratarValor(resumo.sangrias) + tratarValor(resumo.saidas);
+        return saidasMovimentos > saidasObjeto ? saidasMovimentos : saidasObjeto;
+    }
+    
     function obterNumeroResumo(obj, chaves) {
         if (!obj) return 0;
         for (const chave of chaves) {
@@ -1017,21 +1199,24 @@ Por segurança, a abertura só pode ser feita 1 vez por dia. A sessão foi resta
     }
 
     function somarVendaNoResumo(resumo, v) {
-        const detalhes = Array.isArray(v.metodosDetalhados) ? v.metodosDetalhados :
-                         (Array.isArray(v.formasPagamentoDetalhadas) ? v.formasPagamentoDetalhadas : []);
+        const detalhes = Array.isArray(v._detalhesConsolidados) ? v._detalhesConsolidados : detalhesPagamentoDaVenda(v);
+        let somaDetalhes = 0;
 
-        if (detalhes.length > 0) {
-            detalhes.forEach(m => {
-                const categoria = m.categoria || identificarCategoriaMetodo(m.nome || m.forma || m.metodo || '');
-                const valor = tratarValor(m.valor || m.valorRecebido || 0);
-                if (categoria === 'dinheiro') resumo.dinheiro += valor;
-                else if (categoria === 'pix') resumo.pix += valor;
-                else if (categoria === 'debito') resumo.debito += valor;
-                else if (categoria === 'credito') resumo.credito += valor;
-                else if (categoria === 'boleto') resumo.boleto += valor;
-                else if (categoria === 'bonuscred') resumo.bonuscred += valor;
-            });
-        } else {
+        detalhes.forEach(m => {
+            const categoria = m.categoria || identificarCategoriaMetodo(m.nome || m.forma || m.metodo || '');
+            const valor = tratarValor(m.valor || m.valorRecebido || 0);
+            if (valor <= 0) return;
+            somaDetalhes += valor;
+            if (categoria === 'dinheiro') resumo.dinheiro += valor;
+            else if (categoria === 'pix') resumo.pix += valor;
+            else if (categoria === 'debito') resumo.debito += valor;
+            else if (categoria === 'credito') resumo.credito += valor;
+            else if (categoria === 'boleto') resumo.boleto += valor;
+            else if (categoria === 'bonuscred') resumo.bonuscred += valor;
+            else resumo.outros += valor;
+        });
+
+        if (detalhes.length === 0) {
             const forma = v.formaPagamento || v.formaPgto || v.pagamento || v.metodo || v.desc || v.descricao || '';
             const totalVenda = obterNumeroResumo(v, ['valorTotalOriginal','totalVenda','valorTotal','total','subtotal']);
             const valorRecebido = obterNumeroResumo(v, ['valorPagoDia','valorPago','recebido','valorRecebido','valorTotal','total','valor']);
@@ -1053,24 +1238,28 @@ Por segurança, a abertura só pode ser feita 1 vez por dia. A sessão foi resta
             if (cat.credito) resumo.credito += rateado;
             if (cat.bonuscred) resumo.bonuscred += rateado;
             if (cat.boleto && valorBoleto <= 0) resumo.boleto += rateado;
-            if (!cat.dinheiro && !cat.pix && !cat.debito && !cat.credito && !cat.boleto && !cat.bonuscred) resumo.dinheiro += valorBase;
+            if (!cat.dinheiro && !cat.pix && !cat.debito && !cat.credito && !cat.boleto && !cat.bonuscred) resumo.outros += valorBase;
+            somaDetalhes = valorBase;
         }
 
         const totalVendaLinha = obterNumeroResumo(v, ['valorTotalOriginal','totalVenda','valorTotal','total','subtotal']);
-        const valorRecebidoLinha = obterNumeroResumo(v, ['valorPagoDia','valorPago','recebido','valorRecebido','valorTotal','total','valor']);
+        const valorRecebidoLinha = somaDetalhes || obterNumeroResumo(v, ['valorPagoDia','valorPago','recebido','valorRecebido','valorTotal','total','valor']);
+        const formasLinha = detalhes.length
+            ? detalhes.map(m => `${m.nome || m.categoria} ${formatarMoedaBR(m.valor)}`).join(' + ')
+            : (v.formaPagamento || v.formaPgto || v.pagamento || '-');
+
         resumo.linhas.push({
             hora: v.hora || v.dataHora || v.data || '-',
             cliente: v.cliente || v.nomeCliente || v.nome || '-',
-            forma: v.formaPagamento || v.formaPgto || v.pagamento || '-',
+            forma: formasLinha,
             recebido: valorRecebidoLinha || 0,
             total: totalVendaLinha || valorRecebidoLinha || 0
         });
     }
 
     function calcularResumoPagamentosFechamento() {
-        const vendasServidor = obterListaVendasResumo();
-        const vendasLocais = obterVendasLocaisDia();
-        const vendas = vendasServidor.length > 0 ? vendasServidor : vendasLocais;
+        // 100% Google Sheets/Apps Script. Não usa localStorage e não soma resumo acumulado se houver venda detalhada.
+        const vendas = consolidarVendasFechamento(obterListaVendasResumo());
         const resumo = {
             dinheiro: 0,
             pix: 0,
@@ -1078,34 +1267,27 @@ Por segurança, a abertura só pode ser feita 1 vez por dia. A sessão foi resta
             credito: 0,
             boleto: 0,
             bonuscred: 0,
+            outros: 0,
             total: 0,
-            linhas: []
+            linhas: [],
+            quantidadeVendas: vendas.length
         };
 
         if (vendas.length > 0) {
             vendas.forEach(v => somarVendaNoResumo(resumo, v));
         } else {
-            // Fallback com os totais já prontos do backend.
-            // IMPORTANTE: não jogar "outros" automaticamente em PIX, porque isso fazia crédito aparecer como PIX.
-            resumo.dinheiro = obterNumeroResumo(cxResumoAtual, ['vendasDinheiro','dinheiro']);
-            resumo.pix = obterNumeroResumo(cxResumoAtual, ['vendasPix','pix','vendasPIX']);
-            resumo.debito = obterNumeroResumo(cxResumoAtual, ['vendasDebito','debito','cartaoDebito']);
-            resumo.credito = obterNumeroResumo(cxResumoAtual, ['vendasCredito','credito','cartaoCredito']);
-            resumo.boleto = obterNumeroResumo(cxResumoAtual, ['vendasBoleto','boleto']);
-            resumo.bonuscred = obterNumeroResumo(cxResumoAtual, ['vendasBonuscred','bonuscred']);
-
-            if (Array.isArray(cxResumoAtual.movimentacoes)) {
-                cxResumoAtual.movimentacoes.forEach(m => {
-                    const forma = m.formaPagamento || m.desc || m.descricao || m.tipo || '';
-                    const valor = obterNumeroResumo(m, ['valor','total','valorTotal']);
-                    if (String(m.tipo || '').toUpperCase().includes('ENTRADA') && valor > 0) {
-                        resumo.linhas.push({ hora: m.hora || '-', cliente: m.cliente || '-', forma: forma || '-', recebido: valor, total: valor });
-                    }
-                });
-            }
+            // Só usa totais prontos quando o Apps Script não devolveu lista detalhada de vendas.
+            // Não lê movimentações como venda, porque abertura/sangria/despesa podem contaminar o fechamento.
+            resumo.dinheiro = obterNumeroResumo(cxResumoAtual, ['vendasDinheiro','dinheiro','totalDinheiro']);
+            resumo.pix = obterNumeroResumo(cxResumoAtual, ['vendasPix','pix','vendasPIX','totalPix','totalPIX']);
+            resumo.debito = obterNumeroResumo(cxResumoAtual, ['vendasDebito','debito','cartaoDebito','totalDebito']);
+            resumo.credito = obterNumeroResumo(cxResumoAtual, ['vendasCredito','credito','cartaoCredito','totalCredito']);
+            resumo.boleto = obterNumeroResumo(cxResumoAtual, ['vendasBoleto','boleto','totalBoleto']);
+            resumo.bonuscred = obterNumeroResumo(cxResumoAtual, ['vendasBonuscred','bonuscred','totalBonuscred']);
+            resumo.outros = obterNumeroResumo(cxResumoAtual, ['vendasOutros','outros','totalOutros']);
         }
 
-        resumo.total = resumo.dinheiro + resumo.pix + resumo.debito + resumo.credito + resumo.boleto + resumo.bonuscred;
+        resumo.total = resumo.dinheiro + resumo.pix + resumo.debito + resumo.credito + resumo.boleto + resumo.bonuscred + resumo.outros;
         return resumo;
     }
 
@@ -1142,26 +1324,18 @@ Por segurança, a abertura só pode ser feita 1 vez por dia. A sessão foi resta
     async function abrirModalFechamento() {
         document.getElementById("dropdown-caixa").classList.remove("show-dropdown");
 
-        const agora = new Date(); 
-        const hora = agora.getHours(); 
-        const minuto = agora.getMinutes();
         
-        if ((hora < 17 || (hora === 17 && minuto < 50)) && !bloqueioTempoIgnorado) {
-            motivoBloqueioAtual = 'horario'; 
-            document.getElementById('msg-auth-master').innerText = "O fechamento antes das 17:50 requer a senha Master."; 
-            document.getElementById('modal-auth-master').style.display = 'flex'; 
-            document.getElementById('senha-master').value = ''; 
-            return; 
-        }
-
-        document.getElementById('modal-fechamento').style.display = 'flex'; 
+        // TRAVA DE HORÁRIO REMOVIDA:
+        // Agora o fechamento de caixa pode ser aberto em qualquer horário,
+        // sem pedir senha Master por causa do horário.
+document.getElementById('modal-fechamento').style.display = 'flex'; 
         document.getElementById('fech-informado').value = ""; 
         document.getElementById('fech-diferenca').innerText = "Calculando servidor..."; 
         document.getElementById('btn-confirma-fechamento').disabled = true;
 
         const operador = document.getElementById('vendedor-select').value || document.getElementById('login-user').value;
         try {
-            const res = await fetch(`${URL_BASE_2_PRINCIPAL}?tipo=resumo_caixa&vendedor=${encodeURIComponent(operador)}&idSessao=${cxSessao}&nocache=${Date.now()}`); 
+            const res = await fetch(`${URL_BASE_2_PRINCIPAL}?tipo=resumo_caixa&vendedor=${encodeURIComponent(operador)}&idSessao=${encodeURIComponent(cxSessao)}&somenteSessao=true&nocache=${Date.now()}`); 
             cxResumoAtual = await res.json();
             
             if(cxResumoAtual.status === "Erro" || cxResumoAtual.erro) { 
@@ -1172,7 +1346,10 @@ Por segurança, a abertura só pode ser feita 1 vez por dia. A sessão foi resta
             
             const resumoPgto = atualizarTelaResumoFechamento();
             cxResumoAtual.resumoPagamentosFechamento = resumoPgto;
-            const saidas = (tratarValor(cxResumoAtual.despesas || 0)) + (tratarValor(cxResumoAtual.sangrias || 0)); 
+            
+            // CORREÇÃO: Aplica a nova função inteligente para somar as saídas
+            const saidas = calcularTotalSaidas(cxResumoAtual); 
+            
             const dinheiroDia = tratarValor(resumoPgto.dinheiro || cxResumoAtual.vendasDinheiro || 0);
             const saldoEsperado = cxFundoInicial + dinheiroDia - saidas;
             
@@ -1311,7 +1488,10 @@ Por segurança, a abertura só pode ser feita 1 vez por dia. A sessão foi resta
 
     function imprimirRelatorioFechamentoSeguro(informado, esperado, quebra, operador, adminAuth) {
         const dataAtual = new Date().toLocaleString('pt-BR');
-        const saidas = (tratarValor(cxResumoAtual.despesas || 0)) + (tratarValor(cxResumoAtual.sangrias || 0));
+        
+        // CORREÇÃO: Aplica a nova função inteligente para somar as saídas também no PDF
+        const saidas = calcularTotalSaidas(cxResumoAtual);
+        
         const resumoPgto = cxResumoAtual?.resumoPagamentosFechamento || calcularResumoPagamentosFechamento();
         let vendasHtml = "";
         (resumoPgto.linhas || []).forEach(v => {
@@ -2368,7 +2548,7 @@ Por segurança, a abertura só pode ser feita 1 vez por dia. A sessão foi resta
                 alert("Operação registrada no servidor com sucesso!"); 
             } 
             
-            salvarVendaLocalFechamento(payload, metodosDetalhados);
+            // Não salva venda no navegador. O fechamento será montado somente com dados do Google Sheets.
             liberacaoBoletoEntrada = false;
             motivoLiberacaoBoleto = '';
             setTimeout(() => { resetarPDV(); }, 1500);
@@ -2667,24 +2847,9 @@ Por segurança, a abertura só pode ser feita 1 vez por dia. A sessão foi resta
         btn.disabled = false;
     }
 
-    // Restaura o acesso se o operador fechou a aba por acidente no mesmo dia.
-    document.addEventListener('DOMContentLoaded', async function() {
-        const loginSalvo = obterLoginLocal();
-        if (!loginSalvo) return;
-        try {
-            document.getElementById('tela-login').style.display = 'none';
-            document.getElementById('tela-loading').style.display = 'flex';
-            document.getElementById('login-user').value = loginSalvo.nome;
-            await carregarDados();
-            const sel = document.getElementById('vendedor-select');
-            if (sel && loginSalvo.nome) sel.value = loginSalvo.nome;
-            const caixaRestaurado = restaurarCaixaLocalSeExistir();
-            document.getElementById('tela-loading').style.display = 'none';
-            if (caixaRestaurado) setTimeout(verificarBoletosVencidos, 600);
-        } catch(e) {
-            document.getElementById('tela-loading').style.display = 'none';
-            document.getElementById('tela-login').style.display = 'flex';
-        }
+    // Limpa dados antigos de versões anteriores. Não restaura login, caixa ou vendas do navegador.
+    document.addEventListener('DOMContentLoaded', function() {
+        limparArmazenamentoLocalAntigo();
     });
 
           setInterval(() => { if (cxSessao) verificarBoletosVencidos(false); }, 5 * 60 * 1000);
