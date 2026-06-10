@@ -465,7 +465,6 @@
                 <div class="mp-grid-pagos">
                     <div class="mp-grid-title"><i class="fas fa-print"></i> Opções de Impressão</div>
                     <div style="padding:10px 15px; font-size:12px; color: #475569; display:flex; flex-direction:column; gap:8px;">
-                        <!-- Removido 'Imprimir Recibo PDV' conforme solicitado -->
                         <label style="cursor:pointer; font-weight:600; color:var(--blue-header); display:flex; align-items:center; gap:6px;"><input type="checkbox" id="chk-imprimir-nfce" checked style="width:16px; height:16px; accent-color: var(--blue-header);"> Emitir Cupom Fiscal (NFC-e)</label>
                     </div>
                 </div>
@@ -976,10 +975,28 @@ Por segurança, a abertura só pode ser feita 1 vez por dia. A sessão foi resta
 
 
     // =========================================================================
-    // RESUMO DO FECHAMENTO POR FORMA DE PAGAMENTO
-    // Corrige a conferência: dinheiro, pix, cartão, boleto e vendas do dia.
-    // O caixa em dinheiro continua considerando somente dinheiro na gaveta.
+    // RESUMO DO FECHAMENTO POR FORMA DE PAGAMENTO E SAÍDAS AUTOMÁTICAS
     // =========================================================================
+    
+    // Função auxiliar para consolidar todas as saídas lidas das movimentações
+    function calcularTotalSaidas(resumo) {
+        if (!resumo) return 0;
+        let saidasMovimentos = 0;
+        if (Array.isArray(resumo.movimentacoes)) {
+            resumo.movimentacoes.forEach(m => {
+                const tipoMov = String(m.tipo || '').toUpperCase();
+                const descMov = String(m.desc || m.descricao || '').toUpperCase();
+                // Soma tudo que for caracterizado como retirada do caixa
+                if (tipoMov.includes('SAÍDA') || tipoMov.includes('SAIDA') || tipoMov.includes('DESPESA') || tipoMov.includes('SANGRIA') || descMov.includes('[SANGRIA]') || descMov.includes('[DESPESA]')) {
+                    saidasMovimentos += tratarValor(m.valor || m.total || 0);
+                }
+            });
+        }
+        // Usa o maior valor entre o calculado ou o passado solto pelo servidor
+        const saidasObjeto = tratarValor(resumo.despesas) + tratarValor(resumo.sangrias) + tratarValor(resumo.saidas);
+        return saidasMovimentos > saidasObjeto ? saidasMovimentos : saidasObjeto;
+    }
+    
     function obterNumeroResumo(obj, chaves) {
         if (!obj) return 0;
         for (const chave of chaves) {
@@ -1172,7 +1189,10 @@ Por segurança, a abertura só pode ser feita 1 vez por dia. A sessão foi resta
             
             const resumoPgto = atualizarTelaResumoFechamento();
             cxResumoAtual.resumoPagamentosFechamento = resumoPgto;
-            const saidas = (tratarValor(cxResumoAtual.despesas || 0)) + (tratarValor(cxResumoAtual.sangrias || 0)); 
+            
+            // CORREÇÃO: Aplica a nova função inteligente para somar as saídas
+            const saidas = calcularTotalSaidas(cxResumoAtual); 
+            
             const dinheiroDia = tratarValor(resumoPgto.dinheiro || cxResumoAtual.vendasDinheiro || 0);
             const saldoEsperado = cxFundoInicial + dinheiroDia - saidas;
             
@@ -1311,7 +1331,10 @@ Por segurança, a abertura só pode ser feita 1 vez por dia. A sessão foi resta
 
     function imprimirRelatorioFechamentoSeguro(informado, esperado, quebra, operador, adminAuth) {
         const dataAtual = new Date().toLocaleString('pt-BR');
-        const saidas = (tratarValor(cxResumoAtual.despesas || 0)) + (tratarValor(cxResumoAtual.sangrias || 0));
+        
+        // CORREÇÃO: Aplica a nova função inteligente para somar as saídas também no PDF
+        const saidas = calcularTotalSaidas(cxResumoAtual);
+        
         const resumoPgto = cxResumoAtual?.resumoPagamentosFechamento || calcularResumoPagamentosFechamento();
         let vendasHtml = "";
         (resumoPgto.linhas || []).forEach(v => {
