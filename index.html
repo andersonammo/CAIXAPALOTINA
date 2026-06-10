@@ -499,7 +499,6 @@
     }; 
     
     let adminAutorizador = ""; 
-    let bloqueioTempoIgnorado = false;
     let bloqueioQuebraIgnorado = false;
     let liberacaoBoletoEntrada = false;
     let motivoLiberacaoBoleto = "";
@@ -641,7 +640,6 @@
         cxResumoAtual = null;
         carrinho = [];
         bloqueioQuebraIgnorado = false;
-        bloqueioTempoIgnorado = false;
         adminAutorizador = "";
 
         // Recarrega a página já sem sessão salva, voltando direto para a tela de login.
@@ -955,10 +953,7 @@ Por segurança, a abertura só pode ser feita 1 vez por dia. A sessão foi resta
             adminAutorizador = SENHAS_MASTER[senhaInserida]; 
             document.getElementById('modal-auth-master').style.display = 'none';
             
-            if (motivoBloqueioAtual === 'horario') { 
-                bloqueioTempoIgnorado = true; 
-                abrirModalFechamento(); 
-            } else if (motivoBloqueioAtual === 'quebra') { 
+            if (motivoBloqueioAtual === 'quebra') { 
                 bloqueioQuebraIgnorado = true; 
                 confirmarFechamentoDefinitivo(); 
             } else if (motivoBloqueioAtual === 'boleto_entrada') {
@@ -1159,19 +1154,11 @@ Por segurança, a abertura só pode ser feita 1 vez por dia. A sessão foi resta
     async function abrirModalFechamento() {
         document.getElementById("dropdown-caixa").classList.remove("show-dropdown");
 
-        const agora = new Date(); 
-        const hora = agora.getHours(); 
-        const minuto = agora.getMinutes();
         
-        if ((hora < 17 || (hora === 17 && minuto < 50)) && !bloqueioTempoIgnorado) {
-            motivoBloqueioAtual = 'horario'; 
-            document.getElementById('msg-auth-master').innerText = "O fechamento antes das 17:50 requer a senha Master."; 
-            document.getElementById('modal-auth-master').style.display = 'flex'; 
-            document.getElementById('senha-master').value = ''; 
-            return; 
-        }
-
-        document.getElementById('modal-fechamento').style.display = 'flex'; 
+        // TRAVA DE HORÁRIO REMOVIDA:
+        // Agora o fechamento de caixa pode ser aberto em qualquer horário,
+        // sem pedir senha Master por causa do horário.
+document.getElementById('modal-fechamento').style.display = 'flex'; 
         document.getElementById('fech-informado').value = ""; 
         document.getElementById('fech-diferenca').innerText = "Calculando servidor..."; 
         document.getElementById('btn-confirma-fechamento').disabled = true;
