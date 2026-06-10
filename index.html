@@ -574,8 +574,40 @@
         } catch(e) { return []; }
     }
 
+    function gerarChaveVendaFechamento(v) {
+        // Chave única para impedir que a mesma venda apareça 2 vezes no fechamento.
+        // Prioriza o ID da venda. Se o servidor não devolver ID, usa dados estáveis da venda.
+        const id = String(v.idVenda || v.id || v.numeroVenda || v.nVenda || v.codigoVenda || '').trim();
+        if (id) return 'ID:' + id;
+
+        const cliente = String(v.cliente || v.nomeCliente || v.nome || '-').trim().toUpperCase();
+        const forma = String(v.formaPagamento || v.formaPgto || v.pagamento || '-').trim().toUpperCase();
+        const total = tratarValor(v.valorTotalOriginal || v.totalVenda || v.valorTotal || v.total || v.subtotal || 0).toFixed(2);
+        const pago = tratarValor(v.valorPagoDia || v.valorPago || v.recebido || v.valorRecebido || v.valor || 0).toFixed(2);
+        const hora = String(v.hora || v.dataHora || v.data || '').trim();
+        return ['SEMID', hora, cliente, forma, total, pago].join('|');
+    }
+
+    function deduplicarVendasFechamento(lista) {
+        const mapa = new Map();
+        (lista || []).forEach(v => {
+            const chave = gerarChaveVendaFechamento(v);
+            if (!mapa.has(chave)) {
+                mapa.set(chave, v);
+                return;
+            }
+
+            // Se vier duplicado, preserva a versão com mais detalhes de pagamento.
+            const atual = mapa.get(chave);
+            const detalhesAtual = (atual.metodosDetalhados || atual.formasPagamentoDetalhadas || []).length;
+            const detalhesNovo = (v.metodosDetalhados || v.formasPagamentoDetalhadas || []).length;
+            if (detalhesNovo > detalhesAtual) mapa.set(chave, v);
+        });
+        return Array.from(mapa.values());
+    }
+
     function salvarVendaLocalFechamento(payload, metodosDetalhados) {
-        const vendas = obterVendasLocaisDia();
+        let vendas = obterVendasLocaisDia();
         const registro = {
             idVenda: payload.idVenda,
             data: dataHojeISO(),
@@ -591,7 +623,13 @@
                 categoria: identificarCategoriaMetodo(m.nome)
             }))
         };
+
+        // Remove qualquer lançamento local anterior da mesma venda antes de salvar novamente.
+        const chaveNova = gerarChaveVendaFechamento(registro);
+        vendas = vendas.filter(v => gerarChaveVendaFechamento(v) !== chaveNova);
         vendas.push(registro);
+        vendas = deduplicarVendasFechamento(vendas);
+
         localStorage.setItem(CHAVE_VENDAS_DIA_PDV, JSON.stringify({ data: dataHojeISO(), vendas }));
     }
 
@@ -1080,9 +1118,9 @@ Por segurança, a abertura só pode ser feita 1 vez por dia. A sessão foi resta
     }
 
     function calcularResumoPagamentosFechamento() {
-        const vendasServidor = obterListaVendasResumo();
-        const vendasLocais = obterVendasLocaisDia();
-        const vendas = vendasServidor.length > 0 ? vendasServidor : vendasLocais;
+        const vendasServidor = deduplicarVendasFechamento(obterListaVendasResumo());
+        const vendasLocais = deduplicarVendasFechamento(obterVendasLocaisDia());
+        const vendas = deduplicarVendasFechamento(vendasServidor.length > 0 ? vendasServidor : vendasLocais);
         const resumo = {
             dinheiro: 0,
             pix: 0,
