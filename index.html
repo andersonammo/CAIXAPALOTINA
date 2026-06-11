@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ÓTICAS AMMO PALOTINA</title>
+    <title>ÓTICAS AMMO ALTONIA</title>
     
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     
@@ -218,7 +218,7 @@
 <div id="tela-login">
     <div class="login-box">
         <div class="login-logo"><b style="font-size: 45px; line-height: 1; font-family: 'Inter', sans-serif;">A</b><span style="font-size: 13px; font-weight: 700; letter-spacing: 2px;">SAAS</span></div>
-        <h2>PDV AMMO PALOTINA</h2>
+        <h2>PDV AMMO ALTONIA</h2>
         <h3>Acesso Exclusivo Gerência</h3>
         <input type="text" id="login-user" placeholder="Usuário" autocomplete="off">
         <input type="password" id="login-pass" placeholder="Senha">
@@ -247,7 +247,7 @@
             <i class="fas fa-search"></i>
             <input type="text" id="input-filtro-tabela" placeholder="Pesquisar itens no carrinho..." onkeyup="filtrarCarrinho()">
         </div>
-        <span style="font-size: 13px; font-weight: 700; color: #fcd34d; letter-spacing: 0.5px;">AMMO PALOTINA</span>
+        <span style="font-size: 13px; font-weight: 700; color: #fcd34d; letter-spacing: 0.5px;">AMMO ALTONIA</span>
     </div>
     <div class="header-icons">
         <div id="sino-boletos-vencidos" class="bell-wrapper" onclick="abrirNotificacoesBoletos()" title="Boletos vencidos para cobrança">
@@ -499,6 +499,7 @@
     }; 
     
     let adminAutorizador = ""; 
+    let bloqueioTempoIgnorado = false;
     let bloqueioQuebraIgnorado = false;
     let liberacaoBoletoEntrada = false;
     let motivoLiberacaoBoleto = "";
@@ -516,13 +517,12 @@
     let ultimaQtdBoletosVencidos = 0;
 
     // =========================================================================
-    // MODO 100% GOOGLE SHEETS / SERVIDOR
+    // SESSÃO LOCAL E TRAVA DE ABERTURA ÚNICA POR DIA
+    // Mantém login/caixa ao fechar a aba acidentalmente no mesmo navegador.
     // =========================================================================
-    // Correção importante:
-    // - Não usa localStorage para caixa, vendas, login ou fechamento.
-    // - Não cria sessão LOCAL fictícia.
-    // - Fechamento, sangria, despesa e vendas são puxados somente do Google Sheets
-    //   por meio do Apps Script configurado em URL_BASE_2_PRINCIPAL.
+    const CHAVE_LOGIN_PDV = "AMMO_PDV_LOGIN_ATIVO";
+    const CHAVE_CAIXA_PDV = "AMMO_PDV_CAIXA_DIA";
+    const CHAVE_VENDAS_DIA_PDV = "AMMO_PDV_VENDAS_DIA_FECHAMENTO";
 
     function dataHojeISO() {
         const agora = new Date();
@@ -532,273 +532,119 @@
         return `${ano}-${mes}-${dia}`;
     }
 
-    function salvarLoginLocal() {
-        // DESATIVADO: nenhum dado de login fica salvo no navegador.
+    function salvarLoginLocal(nomeColaborador, usuario) {
+        localStorage.setItem(CHAVE_LOGIN_PDV, JSON.stringify({
+            nome: nomeColaborador,
+            usuario: usuario || nomeColaborador,
+            data: dataHojeISO(),
+            salvoEm: new Date().toISOString()
+        }));
     }
 
     function obterLoginLocal() {
-        // DESATIVADO: força login real e evita restaurar dados antigos/inexistentes.
-        return null;
+        try {
+            const dados = JSON.parse(localStorage.getItem(CHAVE_LOGIN_PDV) || "null");
+            if (!dados || dados.data !== dataHojeISO()) return null;
+            return dados;
+        } catch(e) { return null; }
     }
 
-    function salvarCaixaLocal() {
-        // DESATIVADO: caixa só existe se estiver gravado no Google Sheets.
+    function salvarCaixaLocal(idSessao, operador, valorInicial) {
+        localStorage.setItem(CHAVE_CAIXA_PDV, JSON.stringify({
+            data: dataHojeISO(),
+            idSessao: idSessao || ("LOCAL-" + Date.now()),
+            operador: operador,
+            valorInicial: parseFloat(valorInicial || 0),
+            abertoEm: new Date().toISOString()
+        }));
     }
 
     function obterCaixaLocalHoje() {
-        // DESATIVADO: não lê caixa do navegador.
-        return null;
+        try {
+            const dados = JSON.parse(localStorage.getItem(CHAVE_CAIXA_PDV) || "null");
+            if (!dados || dados.data !== dataHojeISO()) return null;
+            return dados;
+        } catch(e) { return null; }
     }
 
     function obterVendasLocaisDia() {
-        // DESATIVADO: fechamento não usa vendas salvas no navegador.
-        return [];
-    }
-
-    function limparArmazenamentoLocalAntigo() {
-        // Limpa versões antigas que gravavam caixa/vendas no navegador e causavam dados fantasmas.
         try {
-            const chavesParaRemover = [];
-            for (let i = 0; i < localStorage.length; i++) {
-                const chave = localStorage.key(i);
-                if (chave && (chave.startsWith('AMMO_PDV_') || chave.includes('PDV') || chave.includes('CAIXA'))) {
-                    chavesParaRemover.push(chave);
-                }
-            }
-            chavesParaRemover.forEach(chave => localStorage.removeItem(chave));
-            sessionStorage.clear();
-        } catch(e) {
-            console.warn('Não foi possível limpar armazenamento antigo.', e);
-        }
+            const pacote = JSON.parse(localStorage.getItem(CHAVE_VENDAS_DIA_PDV) || "null");
+            if (!pacote || pacote.data !== dataHojeISO() || !Array.isArray(pacote.vendas)) return [];
+            return pacote.vendas;
+        } catch(e) { return []; }
     }
 
-    function normalizarTextoFechamento(valor) {
-        return String(valor || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
-    }
-
-    function obterCampoTexto(obj, chaves) {
-        if (!obj) return '';
-        for (const chave of chaves) {
-            if (obj[chave] !== undefined && obj[chave] !== null && String(obj[chave]).trim() !== '') return String(obj[chave]).trim();
-        }
-        return '';
-    }
-
-    function obterIdVendaServidor(v) {
-        // Usa somente campos que representam a venda/pedido.
-        // Não usa o campo genérico "id", porque no Google Sheets ele pode ser apenas o ID da linha
-        // e isso atrapalha a consolidação dos pagamentos da mesma venda.
-        return obterCampoTexto(v, [
-            'idVenda','id_venda','numeroVenda','nVenda','codigoVenda','codVenda','vendaId',
-            'idPedido','idOriginal','pedido','pedidoId','numeroPedido','os','numeroOS','cupom'
-        ]);
-    }
-
-    function gerarChaveVendaFechamento(v, indice) {
-        // Chave única para impedir venda duplicada no fechamento.
-        // Se o Google Sheets retornar o ID da venda, ele é a fonte principal.
-        const id = obterIdVendaServidor(v);
-        if (id) return 'ID:' + id;
-
-        // Sem ID, usa uma assinatura estável SEM a forma de pagamento.
-        // Isso permite juntar uma mesma venda que veio separada em linhas de PIX/Crédito/Débito.
-        const cliente = normalizarTextoFechamento(v.cliente || v.nomeCliente || v.nome || '-');
-        const total = obterNumeroResumo(v, ['valorTotalOriginal','totalVenda','valorTotal','total','subtotal']).toFixed(2);
-        const horaBruta = obterCampoTexto(v, ['dataHora','data','hora','timestamp','criadoEm']);
-        const horaNormalizada = horaBruta.replace(/:\d{2}(\.\d+)?$/, '');
-        return ['SEMID', horaNormalizada, cliente, total].join('|') || ('LINHA-' + indice);
-    }
-
-    function criarDetalhePagamentoDaLinha(v) {
-        const forma = obterCampoTexto(v, [
-            'formaPagamento','formaPgto','pagamento','metodo','forma','formaDePagamento',
-            'tipoPagamento','tipoPgto','bandeira','meioPagamento','desc','descricao'
-        ]);
-        const categoria = identificarCategoriaMetodo(forma || v.categoria || v.tipoPagamento || '');
-        let valor = obterNumeroResumo(v, [
-            'valorPagoDia','valorPago','recebido','valorRecebido','valorMetodo','valorForma',
-            'valorPagamento','valorMovimento','valorEntrada','valor'
-        ]);
-        const totalVenda = obterNumeroResumo(v, ['valorTotalOriginal','totalVenda','valorTotal','total','subtotal']);
-        const valorBoleto = obterNumeroResumo(v, ['valorBoleto','boleto','valorEmBoleto']);
-
-        // Quando a linha é da venda inteira, mas tem boleto separado, não deixa o boleto somar duas vezes.
-        if (valorBoleto > 0 && categoria !== 'boleto' && valor >= totalVenda && totalVenda > 0) {
-            valor = Math.max(0, valor - valorBoleto);
-        }
-        if (!valor && totalVenda && categoria !== 'outros') valor = totalVenda;
-
-        if (!forma && !valor) return null;
-        return { nome: forma || categoria || 'Pagamento', valor: tratarValor(valor), categoria };
-    }
-
-    function adicionarDetalheSeValor(lista, nome, valor, categoria) {
-        const v = tratarValor(valor);
-        if (v > 0) lista.push({ nome, valor: v, categoria });
-    }
-
-    function detalhesPagamentoDaVenda(v) {
-        const arrays = [];
-        if (Array.isArray(v.metodosDetalhados)) arrays.push(...v.metodosDetalhados);
-        if (Array.isArray(v.formasPagamentoDetalhadas)) arrays.push(...v.formasPagamentoDetalhadas);
-        if (Array.isArray(v.pagamentosDetalhados)) arrays.push(...v.pagamentosDetalhados);
-        if (Array.isArray(v.pagamentos)) arrays.push(...v.pagamentos);
-        if (Array.isArray(v.formasPagamento)) arrays.push(...v.formasPagamento);
-        if (Array.isArray(v.meiosPagamento)) arrays.push(...v.meiosPagamento);
-
-        const detalhes = arrays.map(m => ({
-            nome: obterCampoTexto(m, ['nome','formaPagamento','formaPgto','pagamento','metodo','forma','formaDePagamento','desc','descricao','tipo','categoria']) || 'Pagamento',
-            valor: obterNumeroResumo(m, ['valor','valorPago','valorRecebido','recebido','total','valorMetodo','valorForma','valorPagamento']),
-            categoria: m.categoria || identificarCategoriaMetodo(m.nome || m.formaPagamento || m.formaPgto || m.pagamento || m.metodo || m.forma || m.formaDePagamento || m.desc || m.descricao || m.tipo || '')
-        })).filter(m => tratarValor(m.valor) > 0);
-
-        // Se o Apps Script devolver colunas separadas por forma de pagamento na própria linha,
-        // usa essas colunas. Isso evita jogar tudo em Dinheiro quando Pix/Crédito/Débito já estão no banco.
-        if (!detalhes.length) {
-            adicionarDetalheSeValor(detalhes, 'Dinheiro', obterNumeroResumo(v, ['valorDinheiro','dinheiroValor','vendasDinheiro','dinheiroVendas','pagamentoDinheiro','dinheiro']), 'dinheiro');
-            adicionarDetalheSeValor(detalhes, 'PIX', obterNumeroResumo(v, ['valorPix','valorPIX','pixValor','vendasPix','vendasPIX','pixVendas','pagamentoPix','pix']), 'pix');
-            adicionarDetalheSeValor(detalhes, 'Débito', obterNumeroResumo(v, ['valorDebito','valorDébito','debitoValor','débitoValor','vendasDebito','vendasDébito','debitoVendas','cartaoDebito','cartãoDébito','pagamentoDebito','debito','débito']), 'debito');
-            adicionarDetalheSeValor(detalhes, 'Crédito', obterNumeroResumo(v, ['valorCredito','valorCrédito','creditoValor','créditoValor','vendasCredito','vendasCrédito','creditoVendas','cartaoCredito','cartãoCrédito','pagamentoCredito','credito','crédito']), 'credito');
-            adicionarDetalheSeValor(detalhes, 'Boleto', obterNumeroResumo(v, ['valorBoleto','boletoValor','vendasBoleto','boletoVendas','pagamentoBoleto','boleto']), 'boleto');
-            adicionarDetalheSeValor(detalhes, 'Bonuscred', obterNumeroResumo(v, ['valorBonuscred','bonuscredValor','vendasBonuscred','bonuscred']), 'bonuscred');
-        }
-
-        if (!detalhes.length) {
-            const detalheLinha = criarDetalhePagamentoDaLinha(v);
-            if (detalheLinha && tratarValor(detalheLinha.valor) > 0) detalhes.push(detalheLinha);
-        }
-        return detalhes;
-    }
-
-    function chaveDetalhePagamento(m) {
-        return [
-            normalizarTextoFechamento(m.categoria || identificarCategoriaMetodo(m.nome)),
-            normalizarTextoFechamento(m.nome || m.forma || m.metodo || ''),
-            tratarValor(m.valor || 0).toFixed(2)
-        ].join('|');
-    }
-
-    function consolidarVendasFechamento(lista) {
-        const mapa = new Map();
-        (lista || []).forEach((v, indice) => {
-            if (!v) return;
-
-            const sessaoVenda = obterCampoTexto(v, ['idSessao','idSessaoCaixa','sessao','caixaSessao','sessaoCaixa']);
-            // Só filtra por sessão quando a linha realmente trouxer sessão. Se o Apps Script antigo não
-            // gravou idSessao nas vendas, a venda ainda entra pelo filtro de vendedor/data do servidor.
-            if (cxSessao && sessaoVenda && sessaoVenda !== cxSessao) return;
-
-            const chave = gerarChaveVendaFechamento(v, indice);
-            if (!mapa.has(chave)) {
-                mapa.set(chave, {
-                    ...v,
-                    _detalhesConsolidados: [],
-                    _detalhesChaves: new Set(),
-                    _linhasOrigem: 0
-                });
-            }
-
-            const atual = mapa.get(chave);
-            atual._linhasOrigem += 1;
-
-            ['hora','dataHora','data','cliente','nomeCliente','nome','formaPagamento','formaPgto','pagamento','valorTotalOriginal','totalVenda','valorTotal','total','subtotal','valorPagoDia','valorPago','recebido','valorRecebido'].forEach(c => {
-                if ((atual[c] === undefined || atual[c] === null || atual[c] === '') && v[c] !== undefined && v[c] !== null && v[c] !== '') atual[c] = v[c];
-            });
-
-            detalhesPagamentoDaVenda(v).forEach(m => {
-                const detalhe = {
-                    nome: m.nome || m.forma || m.metodo || 'Pagamento',
-                    valor: tratarValor(m.valor || 0),
-                    categoria: m.categoria || identificarCategoriaMetodo(m.nome || m.forma || m.metodo || '')
-                };
-                if (detalhe.valor <= 0) return;
-                const chaveDet = chaveDetalhePagamento(detalhe);
-                if (!atual._detalhesChaves.has(chaveDet)) {
-                    atual._detalhesChaves.add(chaveDet);
-                    atual._detalhesConsolidados.push(detalhe);
-                }
-            });
-        });
-
-        return Array.from(mapa.values()).map(v => {
-            delete v._detalhesChaves;
-            return v;
-        });
-    }
-
-    function deduplicarVendasFechamento(lista) {
-        return consolidarVendasFechamento(lista);
-    }
-
-    function salvarVendaLocalFechamento() {
-        // DESATIVADO: venda não é salva no navegador. O fechamento puxa somente do Google Sheets.
+    function salvarVendaLocalFechamento(payload, metodosDetalhados) {
+        const vendas = obterVendasLocaisDia();
+        const registro = {
+            idVenda: payload.idVenda,
+            data: dataHojeISO(),
+            hora: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+            cliente: payload.nomeCliente || '-',
+            formaPagamento: payload.formaPagamento || '-',
+            valorTotalOriginal: tratarValor(payload.valorTotalOriginal || payload.valorTotal || 0),
+            valorPagoDia: tratarValor(payload.valorPagoDia || payload.valorPago || payload.valorTotal || 0),
+            valorBoleto: tratarValor(payload.valorBoleto || 0),
+            metodosDetalhados: (metodosDetalhados || []).map(m => ({
+                nome: m.nome,
+                valor: tratarValor(m.valor || 0),
+                categoria: identificarCategoriaMetodo(m.nome)
+            }))
+        };
+        vendas.push(registro);
+        localStorage.setItem(CHAVE_VENDAS_DIA_PDV, JSON.stringify({ data: dataHojeISO(), vendas }));
     }
 
     function identificarCategoriaMetodo(nome) {
         const t = String(nome || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
-        if (t.includes('DINHEIRO') || t.includes('ESPECIE')) return 'dinheiro';
+        if (t.includes('DINHEIRO')) return 'dinheiro';
         if (t.includes('PIX')) return 'pix';
-        if (t.includes('DEBITO') || t.includes('DEB ') || t.includes('CARTAO DE D') || t.includes('CARTAO D')) return 'debito';
-        if (t.includes('CREDITO') || t.includes('CRED ') || t.includes('CARTAO DE C') || t.includes('CARTAO C')) return 'credito';
-        if (t.includes('BOLETO') || t.includes('CARNE') || t.includes('CARNÊ')) return 'boleto';
-        if (t.includes('BONUSCRED') || t.includes('BONUS')) return 'bonuscred';
-        if (t.includes('CARTAO') || t.includes('CARTÃO')) return 'credito';
+        if (t.includes('DEBITO') || t.includes('CARTAO DE D') || t.includes('CARTAO D')) return 'debito';
+        if (t.includes('CREDITO') || t.includes('CARTAO DE C') || t.includes('CARTAO C')) return 'credito';
+        if (t.includes('BOLETO')) return 'boleto';
+        if (t.includes('BONUSCRED')) return 'bonuscred';
+        if (t.includes('CARTAO')) return 'credito';
         return 'outros';
     }
 
-    function obterIdSessaoServidor(data) {
-        if (!data) return '';
-        return String(data.idSessao || data.idSessaoCaixa || data.sessao || data.caixaSessao || data.sessaoCaixa || data.idCaixa || data.id || '').trim();
-    }
-
-    function caixaServidorEstaAberto(data) {
-        if (!data) return false;
-        const status = String(data.status || data.situacao || data.caixaStatus || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
-        return data.caixaAberto === true || data.aberto === true || status.includes('ABERTO') || !!obterIdSessaoServidor(data);
-    }
-
-    function aplicarStatusCaixaServidor(data, operador) {
-        if (!caixaServidorEstaAberto(data)) return false;
-        const id = obterIdSessaoServidor(data);
-        if (!id) return false;
-        cxSessao = id;
-        cxFundoInicial = tratarValor(data.valorInicial || data.fundoInicial || data.abertura || data.valorAbertura || data.trocoInicial || 0);
+    function restaurarCaixaLocalSeExistir() {
+        const caixa = obterCaixaLocalHoje();
+        if (!caixa) return false;
+        cxSessao = caixa.idSessao;
+        cxFundoInicial = parseFloat(caixa.valorInicial || 0);
         const sel = document.getElementById('vendedor-select');
-        if (sel && operador) sel.value = operador;
+        if (sel && caixa.operador) sel.value = caixa.operador;
         return true;
     }
 
-    async function buscarStatusCaixaServidor(operador) {
-        const resCx = await fetch(`${URL_BASE_2_PRINCIPAL}?tipo=status_caixa&vendedor=${encodeURIComponent(operador)}&nocache=${Date.now()}`);
-        const cxData = await resCx.json();
-        cxUltimoFechamento = tratarValor(cxData.ultimoFechamento || cxData.valorUltimoFechamento || 0);
-        return cxData;
-    }
-
-    function restaurarCaixaLocalSeExistir() {
-        // DESATIVADO: não restaura caixa do navegador.
-        return false;
-    }
-
     function sairSistema() {
-        limparArmazenamentoLocalAntigo();
-        cxSessao = '';
-        cxFundoInicial = 0;
-        cxResumoAtual = null;
-        carrinho = [];
+        localStorage.removeItem(CHAVE_LOGIN_PDV);
+        localStorage.removeItem(CHAVE_CAIXA_PDV);
+        sessionStorage.clear();
         location.reload();
     }
 
     function voltarTelaLoginAposFechamento() {
-        limparArmazenamentoLocalAntigo();
+        // Ao fechar o caixa, encerra completamente a sessão do operador.
+        // Isso impede que o sistema restaure login/caixa do localStorage e obriga novo login.
+        try {
+            localStorage.removeItem(CHAVE_LOGIN_PDV);
+            localStorage.removeItem(CHAVE_CAIXA_PDV);
+            sessionStorage.clear();
+        } catch(e) {
+            console.warn('Não foi possível limpar a sessão local.', e);
+        }
 
-        cxSessao = '';
+        cxSessao = "";
         cxFundoInicial = 0;
         cxResumoAtual = null;
         carrinho = [];
         bloqueioQuebraIgnorado = false;
-        adminAutorizador = '';
+        bloqueioTempoIgnorado = false;
+        adminAutorizador = "";
 
+        // Recarrega a página já sem sessão salva, voltando direto para a tela de login.
         location.reload();
     }
 
@@ -913,20 +759,23 @@
                 document.getElementById('tela-loading').style.display = 'flex';
                 
                 await carregarDados();
+                
+                if (restaurarCaixaLocalSeExistir()) {
+                    document.getElementById('tela-loading').style.display = 'none';
+                    setTimeout(verificarBoletosVencidos, 600);
+                    return;
+                }
 
                 try {
-                    const cxData = await buscarStatusCaixaServidor(nomeColaborador);
+                    const resCx = await fetch(`${URL_BASE_2_PRINCIPAL}?tipo=status_caixa&vendedor=${encodeURIComponent(nomeColaborador)}`);
+                    const cxData = await resCx.json();
+                    cxUltimoFechamento = parseFloat(cxData.ultimoFechamento) || 0;
                     document.getElementById('tela-loading').style.display = 'none';
-
-                    if (aplicarStatusCaixaServidor(cxData, nomeColaborador)) {
-                        setTimeout(verificarBoletosVencidos, 600);
-                        return;
-                    }
-
                     abrirModalCaixa('abertura');
+
                 } catch (e) {
                     document.getElementById('tela-loading').style.display = 'none';
-                    abrirModalCaixa('abertura');
+                    abrirModalCaixa('abertura'); 
                 }
             } else {
                 mostrarErroLogin(dataLogin.mensagem || "Credenciais inválidas!");
@@ -975,10 +824,13 @@
     // FUNÇÕES DO CAIXA E VALIDAÇÃO MASTER
     // =========================================================================
     function abrirModalCaixa(tipo) {
-        limparArmazenamentoLocalAntigo();
+        const caixaHoje = obterCaixaLocalHoje();
+        if (tipo === 'abertura' && caixaHoje) {
+            cxSessao = caixaHoje.idSessao;
+            cxFundoInicial = parseFloat(caixaHoje.valorInicial || 0);
+            alert(`Caixa já aberto hoje por ${caixaHoje.operador || 'operador'} às ${new Date(caixaHoje.abertoEm).toLocaleTimeString('pt-BR')}.
 
-        if (tipo === 'abertura' && cxSessao) {
-            alert('Caixa já está aberto no Google Sheets para esta sessão. Não será criada nova abertura.');
+Por segurança, a abertura só pode ser feita 1 vez por dia. A sessão foi restaurada.`);
             return;
         }
 
@@ -1033,72 +885,32 @@
 
         try {
             if(tipoOperacaoAtual === 'abertura') {
-                const statusAtual = await buscarStatusCaixaServidor(operador).catch(() => null);
-                if (aplicarStatusCaixaServidor(statusAtual, operador)) {
-                    alert('Já existe caixa aberto no Google Sheets para este operador. A sessão do servidor foi carregada.');
+                const caixaHoje = obterCaixaLocalHoje();
+                if (caixaHoje) {
+                    cxSessao = caixaHoje.idSessao;
+                    cxFundoInicial = parseFloat(caixaHoje.valorInicial || 0);
+                    alert("Este caixa já foi aberto hoje. A sessão anterior foi restaurada e uma nova abertura foi bloqueada.");
                     document.getElementById('modal-operacao-caixa').style.display = 'none';
                     return;
                 }
-
                 const payload = { tipo: 'abrir_caixa', vendedor: operador, valorInicial: valor, travaDiaria: true, dataAbertura: dataHojeISO() }; 
                 const res = await enviarDadosServidor(payload); 
                 const data = await res.json(); 
-
-                if (data.status === 'Erro' || data.status === 'erro' || data.erro) {
-                    alert(data.mensagem || data.erro || 'Erro ao abrir caixa no Google Sheets.');
-                    return;
-                }
-
-                const idServidor = obterIdSessaoServidor(data);
-                if (!idServidor) {
-                    alert('O caixa foi enviado ao Google Sheets, mas o servidor não retornou o ID da sessão. Verifique o Apps Script para retornar idSessao.');
-                    return;
-                }
-
-                cxSessao = idServidor; 
+                cxSessao = data.idSessao || ("LOCAL-" + Date.now()); 
                 cxFundoInicial = valor;
+                salvarCaixaLocal(cxSessao, operador, valor);
                 imprimirComprovanteSeguro("ABERTURA DE CAIXA", valor, desc, operador);
                 setTimeout(verificarBoletosVencidos, 900);
             } else if (tipoOperacaoAtual === 'sangria' || tipoOperacaoAtual === 'despesa') {
-                if(!cxSessao) {
-                    const statusAtual = await buscarStatusCaixaServidor(operador).catch(() => null);
-                    aplicarStatusCaixaServidor(statusAtual, operador);
-                }
                 if(!cxSessao) { 
-                    alert("Sessão do caixa não identificada no Google Sheets. Abra o caixa antes de lançar sangria/despesa."); 
+                    alert("Sessão do caixa não identificada."); 
                     btn.innerHTML = "Confirmar Lançamento"; 
                     btn.disabled = false; 
                     return; 
                 }
-
-                const ehSangria = tipoOperacaoAtual === 'sangria';
-                const prefixo = ehSangria ? "[SANGRIA] " : "[DESPESA] ";
-
-                // RESTAURAÇÃO DE COMPATIBILIDADE:
-                // O Apps Script antigo grava sangria dentro do comando lancar_despesa com prefixo [SANGRIA].
-                // Enviamos também campos extras para versões novas, mas sem trocar para lancar_sangria.
-                const payloadDespesa = {
-                    tipo: 'lancar_despesa',
-                    acao: 'lancar_despesa',
-                    categoria: ehSangria ? 'SANGRIA' : 'DESPESA',
-                    tipoMovimento: ehSangria ? 'SANGRIA' : 'DESPESA',
-                    vendedor: operador,
-                    operador: operador,
-                    descricao: prefixo + desc,
-                    desc: prefixo + desc,
-                    valor: valor,
-                    idSessao: cxSessao,
-                    idSessaoCaixa: cxSessao,
-                    sessaoCaixa: cxSessao,
-                    dataMovimento: dataHojeISO()
-                };
-
-                const resMov = await enviarDadosServidor(payloadDespesa);
-                const dataMov = await resMov.json().catch(() => ({}));
-                if (dataMov.status === 'Erro' || dataMov.status === 'erro' || dataMov.erro || dataMov.sucesso === false) {
-                    alert(dataMov.mensagem || dataMov.erro || 'Erro ao gravar movimentação no Google Sheets.');
-                    return;
-                }
+                const prefixo = tipoOperacaoAtual === 'sangria' ? "[SANGRIA] " : "[DESPESA] "; 
+                const payloadDespesa = { tipo: 'lancar_despesa', vendedor: operador, descricao: prefixo + desc, valor: valor, idSessaoCaixa: cxSessao };
+                await enviarDadosServidor(payloadDespesa); 
                 imprimirComprovanteSeguro(tipoOperacaoAtual.toUpperCase(), valor, desc, operador);
             }
             document.getElementById('modal-operacao-caixa').style.display = 'none';
@@ -1109,47 +921,6 @@
         btn.disabled = false;
     }
 
-    function resumoTemConteudoServidor(data) {
-        if (!data || data.status === 'Erro' || data.status === 'erro' || data.erro) return false;
-        const arrays = ['vendasDia','vendasDoDia','vendasDetalhadas','listaVendas','vendas','registrosVendas','vendasFechamento','detalhesVendas','pagamentos','pagamentosDia','movimentacoes','movimentos'];
-        if (arrays.some(k => Array.isArray(data[k]) && data[k].length > 0)) return true;
-        const chaves = ['vendasDinheiro','vendasPix','vendasPIX','vendasDebito','vendasDébito','vendasCredito','vendasCrédito','vendasBoleto','vendasBonuscred','totalVendas','totalVendasDia','totalPix','totalPIX','totalCredito','totalDebito','totalSangrias','sangrias','despesas','saidas'];
-        return chaves.some(k => tratarValor(data[k]) > 0);
-    }
-
-    async function carregarResumoCaixaServidor(operador) {
-        // Sempre atualiza a sessão diretamente no Google Sheets antes de montar o fechamento.
-        const statusAtual = await buscarStatusCaixaServidor(operador).catch(() => null);
-        aplicarStatusCaixaServidor(statusAtual, operador);
-
-        const base = `${URL_BASE_2_PRINCIPAL}?tipo=resumo_caixa&vendedor=${encodeURIComponent(operador)}&data=${encodeURIComponent(dataHojeISO())}`;
-        const tentativas = [];
-        if (cxSessao) {
-            tentativas.push(`${base}&idSessao=${encodeURIComponent(cxSessao)}&idSessaoCaixa=${encodeURIComponent(cxSessao)}&somenteSessao=true&nocache=${Date.now()}`);
-            tentativas.push(`${base}&idSessao=${encodeURIComponent(cxSessao)}&idSessaoCaixa=${encodeURIComponent(cxSessao)}&nocache=${Date.now() + 1}`);
-        }
-        // Fallback 100% Sheets: usado quando as vendas antigas não têm idSessao gravado.
-        tentativas.push(`${base}&somenteDia=true&nocache=${Date.now() + 2}`);
-        tentativas.push(`${base}&nocache=${Date.now() + 3}`);
-
-        let primeiroValido = null;
-        for (const url of tentativas) {
-            try {
-                const res = await fetch(url);
-                const data = await res.json();
-                if (data && !(data.status === 'Erro' || data.status === 'erro' || data.erro)) {
-                    if (!primeiroValido) primeiroValido = data;
-                    if (resumoTemConteudoServidor(data)) return data;
-                } else if (!primeiroValido) {
-                    primeiroValido = data;
-                }
-            } catch(e) {
-                console.warn('Falha ao buscar resumo do caixa:', e);
-            }
-        }
-        return primeiroValido || {};
-    }
-
     async function abrirModalMovimentacao() {
         document.getElementById("dropdown-caixa").classList.remove("show-dropdown"); 
         document.getElementById('modal-movimentacao').style.display = 'flex';
@@ -1158,22 +929,19 @@
         
         const operador = document.getElementById('vendedor-select').value || document.getElementById('login-user').value;
         try {
-            const data = await carregarResumoCaixaServidor(operador);
+            const res = await fetch(`${URL_BASE_2_PRINCIPAL}?tipo=resumo_caixa&vendedor=${encodeURIComponent(operador)}&idSessao=${cxSessao}&nocache=${Date.now()}`); 
+            const data = await res.json(); 
             tbody.innerHTML = "";
             
-            const movimentos = Array.isArray(data.movimentacoes) ? data.movimentacoes : (Array.isArray(data.movimentos) ? data.movimentos : []);
-            if(!movimentos.length) { 
+            if(!data.movimentacoes || data.movimentacoes.length === 0) { 
                 tbody.innerHTML = "<tr><td colspan='4' style='text-align:center; color:#64748b;'>Nenhuma movimentação no turno atual.</td></tr>"; 
                 return; 
             }
             
-            movimentos.forEach(m => {
+            data.movimentacoes.forEach(m => {
                 const tr = document.createElement('tr'); 
-                const tipoTexto = normalizarTextoFechamento(m.tipo || m.tipoMovimento || m.categoria || m.desc || m.descricao);
-                const ehSaida = tipoTexto.includes('SAIDA') || tipoTexto.includes('DESPESA') || tipoTexto.includes('SANGRIA') || tratarValor(m.valor) < 0;
-                const corVal = ehSaida ? 'var(--danger)' : 'var(--green-text)';
-                const valor = Math.abs(tratarValor(m.valor || m.total || m.valorMovimento || 0));
-                tr.innerHTML = `<td>${escaparHTML(m.hora || m.dataHora || '-')}</td><td><b style="color:${corVal}">${escaparHTML(m.tipo || m.tipoMovimento || m.categoria || '-')}</b></td><td>${escaparHTML(m.desc || m.descricao || m.formaPagamento || '-')}</td><td style="font-weight:bold; color:${corVal}">${formatarMoedaBR(valor)}</td>`; 
+                const corVal = m.tipo === 'ENTRADA' ? 'var(--green-text)' : 'var(--danger)'; 
+                tr.innerHTML = `<td>${m.hora}</td><td><b style="color:${corVal}">${m.tipo}</b></td><td>${m.desc}</td><td style="font-weight:bold; color:${corVal}">R$ ${m.valor.toLocaleString('pt-br', {minimumFractionDigits: 2})}</td>`; 
                 tbody.appendChild(tr);
             });
         } catch(e) { 
@@ -1187,7 +955,10 @@
             adminAutorizador = SENHAS_MASTER[senhaInserida]; 
             document.getElementById('modal-auth-master').style.display = 'none';
             
-            if (motivoBloqueioAtual === 'quebra') { 
+            if (motivoBloqueioAtual === 'horario') { 
+                bloqueioTempoIgnorado = true; 
+                abrirModalFechamento(); 
+            } else if (motivoBloqueioAtual === 'quebra') { 
                 bloqueioQuebraIgnorado = true; 
                 confirmarFechamentoDefinitivo(); 
             } else if (motivoBloqueioAtual === 'boleto_entrada') {
@@ -1204,36 +975,10 @@
 
 
     // =========================================================================
-    // RESUMO DO FECHAMENTO POR FORMA DE PAGAMENTO E SAÍDAS AUTOMÁTICAS
+    // RESUMO DO FECHAMENTO POR FORMA DE PAGAMENTO
+    // Corrige a conferência: dinheiro, pix, cartão, boleto e vendas do dia.
+    // O caixa em dinheiro continua considerando somente dinheiro na gaveta.
     // =========================================================================
-    
-    // Função auxiliar para consolidar todas as saídas lidas das movimentações
-    function calcularTotalSaidas(resumo) {
-        if (!resumo) return 0;
-        const listas = [];
-        ['movimentacoes','movimentos','listaMovimentacoes','despesasDetalhadas','sangriasDetalhadas'].forEach(k => {
-            if (Array.isArray(resumo[k])) listas.push(...resumo[k]);
-        });
-
-        let saidasMovimentos = 0;
-        listas.forEach(m => {
-            const texto = normalizarTextoFechamento([
-                m.tipo, m.tipoMovimento, m.categoria, m.movimento, m.operacao, m.desc, m.descricao
-            ].filter(Boolean).join(' '));
-            const valor = tratarValor(m.valor || m.total || m.valorMovimento || m.valorSaida || 0);
-            const ehSaida = texto.includes('SAIDA') || texto.includes('DESPESA') || texto.includes('SANGRIA') || texto.includes('[DESPESA]') || texto.includes('[SANGRIA]') || valor < 0;
-            const ehAbertura = texto.includes('ABERTURA') || texto.includes('FUNDO') || texto.includes('TROCO INICIAL');
-            if (ehSaida && !ehAbertura) saidasMovimentos += Math.abs(valor);
-        });
-
-        const saidasObjeto =
-            obterNumeroResumo(resumo, ['totalSaidas','saidasTotal','valorSaidas']) +
-            obterNumeroResumo(resumo, ['totalDespesas','despesasTotal','valorDespesas','despesas']) +
-            obterNumeroResumo(resumo, ['totalSangrias','sangriasTotal','valorSangrias','sangrias']);
-
-        return Math.max(saidasMovimentos, saidasObjeto);
-    }
-    
     function obterNumeroResumo(obj, chaves) {
         if (!obj) return 0;
         for (const chave of chaves) {
@@ -1242,88 +987,54 @@
         return 0;
     }
 
-    function objetoTemAlgumaChave(obj, chaves) {
-        if (!obj) return false;
-        return chaves.some(k => obj[k] !== undefined && obj[k] !== null && obj[k] !== '');
-    }
-
-    function movimentoPareceVenda(m) {
-        if (!m) return false;
-        const texto = normalizarTextoFechamento([
-            m.tipo, m.tipoMovimento, m.categoria, m.movimento, m.operacao, m.desc, m.descricao, m.formaPagamento, m.formaPgto
-        ].filter(Boolean).join(' '));
-        if (texto.includes('SANGRIA') || texto.includes('DESPESA') || texto.includes('SAIDA') || texto.includes('ABERTURA') || texto.includes('FUNDO') || texto.includes('TROCO INICIAL')) return false;
-        if (texto.includes('VENDA') || texto.includes('RECEB') || texto.includes('ENTRADA') || texto.includes('PIX') || texto.includes('CREDITO') || texto.includes('DEBITO') || texto.includes('DINHEIRO') || texto.includes('BOLETO')) return true;
-        return false;
-    }
-
     function obterListaVendasResumo() {
         if (!cxResumoAtual) return [];
-        const gruposPrioritarios = [
-            'vendasDia','vendasDoDia','vendasDetalhadas','listaVendas','vendasFechamento',
-            'registrosVendas','detalhesVendas','vendas'
+        const possiveis = [
+            cxResumoAtual.vendasDia,
+            cxResumoAtual.vendasDetalhadas,
+            cxResumoAtual.listaVendas,
+            cxResumoAtual.vendas,
+            cxResumoAtual.registrosVendas
         ];
-        for (const chave of gruposPrioritarios) {
-            const lista = cxResumoAtual[chave];
+        for (const lista of possiveis) {
             if (Array.isArray(lista) && lista.length > 0) return lista;
         }
-
-        const gruposPagamentos = ['pagamentosDia','pagamentosDetalhados','pagamentos','formasPagamentoDetalhadas','formasPagamento','meiosPagamento'];
-        for (const chave of gruposPagamentos) {
-            const lista = cxResumoAtual[chave];
-            if (Array.isArray(lista) && lista.length > 0) return lista;
-        }
-
-        const movimentos = [];
-        ['movimentacoes','movimentos','listaMovimentacoes'].forEach(k => {
-            if (Array.isArray(cxResumoAtual[k])) movimentos.push(...cxResumoAtual[k]);
-        });
-        const vendasPorMovimento = movimentos.filter(movimentoPareceVenda).map(m => ({
-            ...m,
-            formaPagamento: m.formaPagamento || m.formaPgto || m.pagamento || m.metodo || m.forma || m.desc || m.descricao || m.tipo || 'Entrada',
-            valorPagoDia: obterNumeroResumo(m, ['valorRecebido','valorPago','recebido','valor','total','valorMovimento','valorEntrada']),
-            valorTotalOriginal: obterNumeroResumo(m, ['valorTotalOriginal','totalVenda','valorTotal','total','valor','valorMovimento']),
-            cliente: m.cliente || m.nomeCliente || m.nome || '-'
-        }));
-        return vendasPorMovimento;
+        return [];
     }
 
     function categorizarFormaPagamento(texto) {
         const t = String(texto || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
         const cat = { dinheiro: false, pix: false, debito: false, credito: false, boleto: false, bonuscred: false };
-        if (t.includes('DINHEIRO') || t.includes('ESPECIE')) cat.dinheiro = true;
+        if (t.includes('DINHEIRO')) cat.dinheiro = true;
         if (t.includes('PIX')) cat.pix = true;
-        if (t.includes('BOLETO') || t.includes('CARNE') || t.includes('CARNÊ')) cat.boleto = true;
-        if (t.includes('BONUSCRED') || t.includes('BONUS')) cat.bonuscred = true;
-        if (t.includes('DEBITO') || t.includes('DEB ') || t.includes('CARTAO DE D') || t.includes('CARTAO D')) cat.debito = true;
-        if (t.includes('CREDITO') || t.includes('CRED ') || t.includes('CARTAO DE C') || t.includes('CARTAO C')) cat.credito = true;
-        if ((t.includes('CARTAO') || t.includes('CARTÃO')) && !cat.debito && !cat.credito) cat.credito = true;
+        if (t.includes('BOLETO')) cat.boleto = true;
+        if (t.includes('BONUSCRED')) cat.bonuscred = true;
+        if (t.includes('DEBITO') || t.includes('CARTAO DE D') || t.includes('CARTAO D')) cat.debito = true;
+        if (t.includes('CREDITO') || t.includes('CARTAO DE C') || t.includes('CARTAO C')) cat.credito = true;
+        if (t.includes('CARTAO') && !cat.debito && !cat.credito) cat.credito = true;
         return cat;
     }
 
     function somarVendaNoResumo(resumo, v) {
-        const detalhes = Array.isArray(v._detalhesConsolidados) ? v._detalhesConsolidados : detalhesPagamentoDaVenda(v);
-        let somaDetalhes = 0;
+        const detalhes = Array.isArray(v.metodosDetalhados) ? v.metodosDetalhados :
+                         (Array.isArray(v.formasPagamentoDetalhadas) ? v.formasPagamentoDetalhadas : []);
 
-        detalhes.forEach(m => {
-            const categoria = m.categoria || identificarCategoriaMetodo(m.nome || m.forma || m.metodo || '');
-            const valor = tratarValor(m.valor || m.valorRecebido || 0);
-            if (valor <= 0) return;
-            somaDetalhes += valor;
-            if (categoria === 'dinheiro') resumo.dinheiro += valor;
-            else if (categoria === 'pix') resumo.pix += valor;
-            else if (categoria === 'debito') resumo.debito += valor;
-            else if (categoria === 'credito') resumo.credito += valor;
-            else if (categoria === 'boleto') resumo.boleto += valor;
-            else if (categoria === 'bonuscred') resumo.bonuscred += valor;
-            else resumo.outros += valor;
-        });
-
-        if (detalhes.length === 0) {
-            const forma = v.formaPagamento || v.formaPgto || v.pagamento || v.metodo || v.forma || v.desc || v.descricao || '';
+        if (detalhes.length > 0) {
+            detalhes.forEach(m => {
+                const categoria = m.categoria || identificarCategoriaMetodo(m.nome || m.forma || m.metodo || '');
+                const valor = tratarValor(m.valor || m.valorRecebido || 0);
+                if (categoria === 'dinheiro') resumo.dinheiro += valor;
+                else if (categoria === 'pix') resumo.pix += valor;
+                else if (categoria === 'debito') resumo.debito += valor;
+                else if (categoria === 'credito') resumo.credito += valor;
+                else if (categoria === 'boleto') resumo.boleto += valor;
+                else if (categoria === 'bonuscred') resumo.bonuscred += valor;
+            });
+        } else {
+            const forma = v.formaPagamento || v.formaPgto || v.pagamento || v.metodo || v.desc || v.descricao || '';
             const totalVenda = obterNumeroResumo(v, ['valorTotalOriginal','totalVenda','valorTotal','total','subtotal']);
             const valorRecebido = obterNumeroResumo(v, ['valorPagoDia','valorPago','recebido','valorRecebido','valorTotal','total','valor']);
-            const valorBoleto = obterNumeroResumo(v, ['valorBoleto','boleto','valorEmBoleto']);
+            const valorBoleto = obterNumeroResumo(v, ['valorBoleto','boleto']);
             const cat = categorizarFormaPagamento(forma);
             let valorBase = valorRecebido || totalVenda || 0;
             let partes = [cat.dinheiro, cat.pix, cat.debito, cat.credito, cat.boleto, cat.bonuscred].filter(Boolean).length || 1;
@@ -1341,68 +1052,24 @@
             if (cat.credito) resumo.credito += rateado;
             if (cat.bonuscred) resumo.bonuscred += rateado;
             if (cat.boleto && valorBoleto <= 0) resumo.boleto += rateado;
-            if (!cat.dinheiro && !cat.pix && !cat.debito && !cat.credito && !cat.boleto && !cat.bonuscred) resumo.outros += valorBase;
-            somaDetalhes = valorBase;
+            if (!cat.dinheiro && !cat.pix && !cat.debito && !cat.credito && !cat.boleto && !cat.bonuscred) resumo.dinheiro += valorBase;
         }
 
         const totalVendaLinha = obterNumeroResumo(v, ['valorTotalOriginal','totalVenda','valorTotal','total','subtotal']);
-        const valorRecebidoLinha = somaDetalhes || obterNumeroResumo(v, ['valorPagoDia','valorPago','recebido','valorRecebido','valorTotal','total','valor']);
-        const formasLinha = detalhes.length
-            ? detalhes.map(m => `${m.nome || m.categoria} ${formatarMoedaBR(m.valor)}`).join(' + ')
-            : (v.formaPagamento || v.formaPgto || v.pagamento || v.metodo || '-');
-
+        const valorRecebidoLinha = obterNumeroResumo(v, ['valorPagoDia','valorPago','recebido','valorRecebido','valorTotal','total','valor']);
         resumo.linhas.push({
-            hora: v.hora || v.dataHora || v.data || v.timestamp || '-',
+            hora: v.hora || v.dataHora || v.data || '-',
             cliente: v.cliente || v.nomeCliente || v.nome || '-',
-            forma: formasLinha,
+            forma: v.formaPagamento || v.formaPgto || v.pagamento || '-',
             recebido: valorRecebidoLinha || 0,
             total: totalVendaLinha || valorRecebidoLinha || 0
         });
     }
 
-    function somarTotaisObjetoPorForma(resumo, obj) {
-        if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
-        let achou = false;
-        Object.keys(obj).forEach(k => {
-            const valor = tratarValor(obj[k]);
-            if (valor <= 0) return;
-            const categoria = identificarCategoriaMetodo(k);
-            if (categoria === 'outros') return;
-            resumo[categoria] += valor;
-            achou = true;
-        });
-        return achou;
-    }
-
-    function aplicarTotaisProntosDoServidor(resumo) {
-        let achou = false;
-        ['formasPagamentoResumo','resumoPagamentos','porFormaPagamento','totaisPorForma','formasPagamento','pagamentosResumo'].forEach(k => {
-            if (somarTotaisObjetoPorForma(resumo, cxResumoAtual[k])) achou = true;
-        });
-
-        if (achou) return true;
-
-        const temChavesSeparadas = objetoTemAlgumaChave(cxResumoAtual, [
-            'pix','PIX','debito','débito','credito','crédito','boleto','bonuscred',
-            'vendasPix','vendasPIX','vendasDebito','vendasDébito','vendasCredito','vendasCrédito','vendasBoleto'
-        ]);
-
-        const dinheiroKeys = ['vendasDinheiro','totalVendasDinheiro','totalDinheiroVendas','dinheiroVendas','valorDinheiroVendas','valorDinheiro'];
-        if (temChavesSeparadas) dinheiroKeys.push('dinheiro');
-
-        resumo.dinheiro = obterNumeroResumo(cxResumoAtual, dinheiroKeys);
-        resumo.pix = obterNumeroResumo(cxResumoAtual, ['vendasPix','vendasPIX','totalVendasPix','totalVendasPIX','totalPix','totalPIX','valorPix','valorPIX','pix']);
-        resumo.debito = obterNumeroResumo(cxResumoAtual, ['vendasDebito','vendasDébito','totalVendasDebito','totalVendasDébito','cartaoDebito','cartãoDébito','totalDebito','totalDébito','valorDebito','valorDébito','debito','débito']);
-        resumo.credito = obterNumeroResumo(cxResumoAtual, ['vendasCredito','vendasCrédito','totalVendasCredito','totalVendasCrédito','cartaoCredito','cartãoCrédito','totalCredito','totalCrédito','valorCredito','valorCrédito','credito','crédito']);
-        resumo.boleto = obterNumeroResumo(cxResumoAtual, ['vendasBoleto','totalVendasBoleto','totalBoleto','valorBoleto','boleto']);
-        resumo.bonuscred = obterNumeroResumo(cxResumoAtual, ['vendasBonuscred','totalVendasBonuscred','totalBonuscred','valorBonuscred','bonuscred']);
-        resumo.outros = obterNumeroResumo(cxResumoAtual, ['vendasOutros','totalVendasOutros','totalOutros','valorOutros']);
-
-        return (resumo.dinheiro + resumo.pix + resumo.debito + resumo.credito + resumo.boleto + resumo.bonuscred + resumo.outros) > 0;
-    }
-
     function calcularResumoPagamentosFechamento() {
-        const vendas = consolidarVendasFechamento(obterListaVendasResumo());
+        const vendasServidor = obterListaVendasResumo();
+        const vendasLocais = obterVendasLocaisDia();
+        const vendas = vendasServidor.length > 0 ? vendasServidor : vendasLocais;
         const resumo = {
             dinheiro: 0,
             pix: 0,
@@ -1410,19 +1077,34 @@
             credito: 0,
             boleto: 0,
             bonuscred: 0,
-            outros: 0,
             total: 0,
-            linhas: [],
-            quantidadeVendas: vendas.length
+            linhas: []
         };
 
         if (vendas.length > 0) {
             vendas.forEach(v => somarVendaNoResumo(resumo, v));
         } else {
-            aplicarTotaisProntosDoServidor(resumo);
+            // Fallback com os totais já prontos do backend.
+            // IMPORTANTE: não jogar "outros" automaticamente em PIX, porque isso fazia crédito aparecer como PIX.
+            resumo.dinheiro = obterNumeroResumo(cxResumoAtual, ['vendasDinheiro','dinheiro']);
+            resumo.pix = obterNumeroResumo(cxResumoAtual, ['vendasPix','pix','vendasPIX']);
+            resumo.debito = obterNumeroResumo(cxResumoAtual, ['vendasDebito','debito','cartaoDebito']);
+            resumo.credito = obterNumeroResumo(cxResumoAtual, ['vendasCredito','credito','cartaoCredito']);
+            resumo.boleto = obterNumeroResumo(cxResumoAtual, ['vendasBoleto','boleto']);
+            resumo.bonuscred = obterNumeroResumo(cxResumoAtual, ['vendasBonuscred','bonuscred']);
+
+            if (Array.isArray(cxResumoAtual.movimentacoes)) {
+                cxResumoAtual.movimentacoes.forEach(m => {
+                    const forma = m.formaPagamento || m.desc || m.descricao || m.tipo || '';
+                    const valor = obterNumeroResumo(m, ['valor','total','valorTotal']);
+                    if (String(m.tipo || '').toUpperCase().includes('ENTRADA') && valor > 0) {
+                        resumo.linhas.push({ hora: m.hora || '-', cliente: m.cliente || '-', forma: forma || '-', recebido: valor, total: valor });
+                    }
+                });
+            }
         }
 
-        resumo.total = resumo.dinheiro + resumo.pix + resumo.debito + resumo.credito + resumo.boleto + resumo.bonuscred + resumo.outros;
+        resumo.total = resumo.dinheiro + resumo.pix + resumo.debito + resumo.credito + resumo.boleto + resumo.bonuscred;
         return resumo;
     }
 
@@ -1459,9 +1141,18 @@
     async function abrirModalFechamento() {
         document.getElementById("dropdown-caixa").classList.remove("show-dropdown");
 
-        // TRAVA DE HORÁRIO REMOVIDA:
-        // Agora o fechamento de caixa pode ser aberto em qualquer horário,
-        // sem pedir senha Master por causa do horário.
+        const agora = new Date(); 
+        const hora = agora.getHours(); 
+        const minuto = agora.getMinutes();
+        
+        if ((hora < 17 || (hora === 17 && minuto < 50)) && !bloqueioTempoIgnorado) {
+            motivoBloqueioAtual = 'horario'; 
+            document.getElementById('msg-auth-master').innerText = "O fechamento antes das 17:50 requer a senha Master."; 
+            document.getElementById('modal-auth-master').style.display = 'flex'; 
+            document.getElementById('senha-master').value = ''; 
+            return; 
+        }
+
         document.getElementById('modal-fechamento').style.display = 'flex'; 
         document.getElementById('fech-informado').value = ""; 
         document.getElementById('fech-diferenca').innerText = "Calculando servidor..."; 
@@ -1469,23 +1160,19 @@
 
         const operador = document.getElementById('vendedor-select').value || document.getElementById('login-user').value;
         try {
-            cxResumoAtual = await carregarResumoCaixaServidor(operador);
+            const res = await fetch(`${URL_BASE_2_PRINCIPAL}?tipo=resumo_caixa&vendedor=${encodeURIComponent(operador)}&idSessao=${cxSessao}&nocache=${Date.now()}`); 
+            cxResumoAtual = await res.json();
             
             if(cxResumoAtual.status === "Erro" || cxResumoAtual.erro) { 
-                alert("⚠️ O servidor não reconheceu o comando de resumo_caixa."); 
+                alert("⚠️ O servidor não reconheceu o comando."); 
                 document.getElementById('fech-diferenca').innerText = "Erro do Servidor."; 
                 return; 
             }
-
-            const idServidorResumo = obterIdSessaoServidor(cxResumoAtual);
-            if (!cxSessao && idServidorResumo) cxSessao = idServidorResumo;
-            cxFundoInicial = tratarValor(cxResumoAtual.valorInicial || cxResumoAtual.fundoInicial || cxResumoAtual.abertura || cxResumoAtual.valorAbertura || cxFundoInicial || 0);
             
             const resumoPgto = atualizarTelaResumoFechamento();
             cxResumoAtual.resumoPagamentosFechamento = resumoPgto;
-            
-            const saidas = calcularTotalSaidas(cxResumoAtual); 
-            const dinheiroDia = tratarValor(resumoPgto.dinheiro || 0);
+            const saidas = (tratarValor(cxResumoAtual.despesas || 0)) + (tratarValor(cxResumoAtual.sangrias || 0)); 
+            const dinheiroDia = tratarValor(resumoPgto.dinheiro || cxResumoAtual.vendasDinheiro || 0);
             const saldoEsperado = cxFundoInicial + dinheiroDia - saidas;
             
             document.getElementById('fech-fundo').innerText = formatarMoedaBR(cxFundoInicial); 
@@ -1497,7 +1184,6 @@
             document.getElementById('fech-diferenca').innerText = "Informe o valor em gaveta acima"; 
             document.getElementById('btn-confirma-fechamento').disabled = false;
         } catch (e) { 
-            console.error(e);
             document.getElementById('fech-diferenca').innerText = "Erro ao buscar dados do servidor."; 
         }
     }
@@ -1596,7 +1282,7 @@
         const html = `
             <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #000; width: 70mm; font-size: 12px; margin: 0 auto; padding-top: 10px;">
                 <div style="text-align: center; border-bottom: 1px dashed #000; padding-bottom: 10px; margin-bottom: 10px;">
-                    <h2 style="margin: 0; font-size: 15px; font-weight: 900;">ÓTICAS AMMO PALOTINA</h2>
+                    <h2 style="margin: 0; font-size: 15px; font-weight: 900;">ÓTICAS AMMO ALTONIA</h2>
                     <p style="margin: 2px 0; font-size: 11px; font-weight: bold;">VALE - QUEBRA DE CAIXA</p>
                 </div>
                 <div style="margin-bottom: 10px;">
@@ -1624,10 +1310,7 @@
 
     function imprimirRelatorioFechamentoSeguro(informado, esperado, quebra, operador, adminAuth) {
         const dataAtual = new Date().toLocaleString('pt-BR');
-        
-        // CORREÇÃO: Aplica a nova função inteligente para somar as saídas também no PDF
-        const saidas = calcularTotalSaidas(cxResumoAtual);
-        
+        const saidas = (tratarValor(cxResumoAtual.despesas || 0)) + (tratarValor(cxResumoAtual.sangrias || 0));
         const resumoPgto = cxResumoAtual?.resumoPagamentosFechamento || calcularResumoPagamentosFechamento();
         let vendasHtml = "";
         (resumoPgto.linhas || []).forEach(v => {
@@ -1647,7 +1330,7 @@
         const html = `
             <div style="font-family: 'Courier New', Courier, monospace; color: #000; width: 70mm; font-size: 11px; margin: 0 auto; padding-top: 10px;">
                 <div style="text-align: center; border-bottom: 1px dashed #000; padding-bottom: 8px; margin-bottom: 8px;">
-                    <h2 style="margin: 0; font-size: 15px; font-weight: 900;">ÓTICAS AMMO PALOTINA</h2>
+                    <h2 style="margin: 0; font-size: 15px; font-weight: 900;">ÓTICAS AMMO ALTONIA</h2>
                     <p style="margin: 2px 0;">RELATÓRIO Z - FECHAMENTO DE CAIXA</p>
                 </div>
                 <div>
@@ -1720,7 +1403,7 @@
             <div style="font-family:'Courier New', Courier, monospace; color:#000; width:72mm; font-size:11px; margin:0 auto; padding-top:8px;">
                 <div style="text-align:center; border-bottom:1px dashed #000; padding-bottom:8px; margin-bottom:8px;">
                     ${logoEmpresaHTML('42mm', '18mm')}
-                    <h2 style="margin:0; font-size:15px; font-weight:900;">ÓTICAS AMMO PALOTINA</h2>
+                    <h2 style="margin:0; font-size:15px; font-weight:900;">ÓTICAS AMMO ALTONIA</h2>
                     <p style="margin:2px 0; font-size:10px;">COMPROVANTE DE PAGAMENTO</p>
                     <p style="margin:2px 0; font-size:10px;">Documento não fiscal</p>
                 </div>
@@ -2021,7 +1704,7 @@
         return `
             <div style="font-family: Arial, sans-serif; color:#111827; width:190mm; min-height:260mm; padding:16mm; box-sizing:border-box; background:#fff;">
                 <div style="text-align:center; border-bottom:3px solid #0099cc; padding-bottom:12px; margin-bottom:16px;">
-                    <h1 style="margin:0; font-size:24px; color:#0f172a;">ÓTICAS AMMO PALOTINA</h1>
+                    <h1 style="margin:0; font-size:24px; color:#0f172a;">ÓTICAS AMMO ALTONIA</h1>
                     <p style="margin:4px 0 0; font-size:13px; color:#475569;">ORDEM DE SERVIÇO / RECIBO DE VENDA</p>
                 </div>
 
@@ -2160,7 +1843,7 @@
             <div style="font-family: Arial, Helvetica, sans-serif; color:#000; width:70mm; margin:0 auto; padding:8px 4px; font-size:11px;">
                 <div style="text-align:center; border-bottom:1px dashed #000; padding-bottom:8px; margin-bottom:8px;">
                     ${logoEmpresaHTML('42mm', '18mm')}
-                    <div style="font-size:15px; font-weight:900; margin-top:3px;">ÓTICAS AMMO PALOTINA</div>
+                    <div style="font-size:15px; font-weight:900; margin-top:3px;">ÓTICAS AMMO ALTONIA</div>
                     <div style="font-size:10px; font-weight:700; margin-top:3px;">COMPROVANTE DE PAGAMENTO DE BOLETO</div>
                     <div style="font-size:9px; margin-top:2px;">Documento gerencial interno</div>
                 </div>
@@ -2627,11 +2310,7 @@
             valorBoleto: valorBoleto,
             diaVencimentoBoleto: vendaComBoleto ? diaVencimentoBoleto : '',
             vencimentoBoletoEscolhido: vendaComBoleto ? `Dia ${diaVencimentoBoleto}` : '',
-            idVenda: "AMMO-" + Date.now(),
-            idSessao: cxSessao,
-            idSessaoCaixa: cxSessao,
-            sessaoCaixa: cxSessao,
-            dataVenda: dataHojeISO(),
+            idVenda: "AMMO-" + Date.now(), 
             emitirNotaFiscal: emitirNF,
             boletoEntradaMinima50: vendaComBoleto ? (totalVendaFinal * 0.50) : 0,
             boletoEntradaInformada: vendaComBoleto ? (totalPago - valorBoleto) : totalPago,
@@ -2688,7 +2367,7 @@
                 alert("Operação registrada no servidor com sucesso!"); 
             } 
             
-            // Não salva venda no navegador. O fechamento será montado somente com dados do Google Sheets.
+            salvarVendaLocalFechamento(payload, metodosDetalhados);
             liberacaoBoletoEntrada = false;
             motivoLiberacaoBoleto = '';
             setTimeout(() => { resetarPDV(); }, 1500);
@@ -2835,32 +2514,22 @@
                 return; 
             } 
             
-            // CORREÇÃO: Usamos um Map para manter a melhor OS por cliente
-            const vendasFiltradas = new Map();
+            // Variável criada para rastrear e bloquear as OSs duplicadas do mesmo cliente
+            const clientesRenderizados = new Set();
 
             dados.vendas.forEach(v => { 
                 if (!v.id || v.id.trim() === '' || String(v.id) === 'undefined') return; 
 
+                // Padroniza o nome do cliente
                 const nomeCliente = String(v.cliente || '').trim().toUpperCase();
                 
-                if (nomeCliente) {
-                    if (!vendasFiltradas.has(nomeCliente)) {
-                        // Se é o primeiro que vemos, salvamos
-                        vendasFiltradas.set(nomeCliente, v);
-                    } else {
-                        // Se já vimos esse cliente, verificamos se o ID atual é o da OS verdadeira (mais curto)
-                        // Exemplo: AMMO-425074 (correto) vs AMMO-1781012808202 (venda agrupada longa)
-                        const existente = vendasFiltradas.get(nomeCliente);
-                        // Substitui se o ID que acabamos de encontrar for menor que o que estava gravado
-                        if (v.id.length < existente.id.length) {
-                            vendasFiltradas.set(nomeCliente, v);
-                        }
-                    }
-                }
-            }); 
+                // Se o cliente já foi listado na tabela, o sistema ignora a duplicata
+                if (clientesRenderizados.has(nomeCliente)) return;
+                
+                // Salva o cliente na memória para bloquear as próximas repetições
+                if (nomeCliente) clientesRenderizados.add(nomeCliente);
 
-            Array.from(vendasFiltradas.values()).forEach(v => { 
-                // CORREÇÃO: Tratamento de formatação da data
+                // Tratamento de formatação da data
                 let dataFormatada = v.data || '-';
                 if (v.data && String(v.data).includes('T')) {
                     const d = new Date(v.data);
@@ -2885,83 +2554,83 @@
     }
 
     async function buscarEImprimirPDFOS(event, idVenda) {
-        const btn = event.currentTarget;
-        const textoOriginal = btn.innerHTML;
+    const btn = event.currentTarget;
+    const textoOriginal = btn.innerHTML;
 
-        btn.innerHTML = "<i class='fas fa-spinner fa-spin'></i> Baixando...";
-        btn.disabled = true;
+    btn.innerHTML = "<i class='fas fa-spinner fa-spin'></i> Baixando...";
+    btn.disabled = true;
 
-        try {
-            const payload = { tipo: "buscar_pdf_os", idVenda: idVenda };
+    try {
+        const payload = { tipo: "buscar_pdf_os", idVenda: idVenda };
 
-            const res = await fetch(URL_BASE_2_PRINCIPAL, {
-                method: 'POST',
-                body: JSON.stringify(payload)
-            });
+        const res = await fetch(URL_BASE_2_PRINCIPAL, {
+            method: 'POST',
+            body: JSON.stringify(payload)
+        });
 
-            const dados = await res.json();
+        const dados = await res.json();
 
-            if (!dados.sucesso) {
-                alert(dados.mensagem || "O arquivo PDF da Ordem de Serviço não foi encontrado.");
-                return;
-            }
-
-            const arquivoOS = dados.linkPdf || dados.pdfBase64 || dados.link || "";
-
-            if (!arquivoOS) {
-                alert("PDF localizado, mas o link retornou vazio.");
-                return;
-            }
-
-            // Quando for link do Google Drive ou URL normal
-            const arquivoTexto = String(arquivoOS || "").trim();
-
-            if (
-                arquivoTexto.startsWith("http://") ||
-                arquivoTexto.startsWith("https://")
-            ) {
-                window.open(arquivoTexto, "_blank");
-                btn.innerHTML = "<i class='fas fa-check'></i> Aberto";
-                return;
-            }
-
-            if (!arquivoTexto.startsWith("data:application/pdf")) {
-                alert("O servidor retornou um valor inválido no lugar do PDF: " + arquivoTexto);
-                return;
-            }
-            
-            // Quando for PDF em base64/data URI
-            let iframe = document.getElementById('iframe-impressao-pdf');
-
-            if (!iframe) {
-                iframe = document.createElement('iframe');
-                iframe.id = 'iframe-impressao-pdf';
-                iframe.style.display = 'none';
-                document.body.appendChild(iframe);
-            }
-
-            iframe.src = arquivoOS;
-
-            iframe.onload = function() {
-                try {
-                    iframe.contentWindow.focus();
-                    iframe.contentWindow.print();
-                    btn.innerHTML = "<i class='fas fa-check'></i> Impresso";
-                } catch (erroPrint) {
-                    window.open(arquivoOS, "_blank");
-                    btn.innerHTML = "<i class='fas fa-check'></i> Aberto";
-                }
-            };
-
-        } catch (e) {
-            alert("Erro ao conectar com o servidor para baixar a Ordem de Serviço.");
-        } finally {
-            setTimeout(() => {
-                btn.innerHTML = textoOriginal;
-                btn.disabled = false;
-            }, 3000);
+        if (!dados.sucesso) {
+            alert(dados.mensagem || "O arquivo PDF da Ordem de Serviço não foi encontrado.");
+            return;
         }
+
+        const arquivoOS = dados.linkPdf || dados.pdfBase64 || dados.link || "";
+
+        if (!arquivoOS) {
+            alert("PDF localizado, mas o link retornou vazio.");
+            return;
+        }
+
+        // Quando for link do Google Drive ou URL normal
+        const arquivoTexto = String(arquivoOS || "").trim();
+
+        if (
+            arquivoTexto.startsWith("http://") ||
+            arquivoTexto.startsWith("https://")
+        ) {
+            window.open(arquivoTexto, "_blank");
+            btn.innerHTML = "<i class='fas fa-check'></i> Aberto";
+            return;
+        }
+
+        if (!arquivoTexto.startsWith("data:application/pdf")) {
+            alert("O servidor retornou um valor inválido no lugar do PDF: " + arquivoTexto);
+            return;
+        }
+        
+        // Quando for PDF em base64/data URI
+        let iframe = document.getElementById('iframe-impressao-pdf');
+
+        if (!iframe) {
+            iframe = document.createElement('iframe');
+            iframe.id = 'iframe-impressao-pdf';
+            iframe.style.display = 'none';
+            document.body.appendChild(iframe);
+        }
+
+        iframe.src = arquivoOS;
+
+        iframe.onload = function() {
+            try {
+                iframe.contentWindow.focus();
+                iframe.contentWindow.print();
+                btn.innerHTML = "<i class='fas fa-check'></i> Impresso";
+            } catch (erroPrint) {
+                window.open(arquivoOS, "_blank");
+                btn.innerHTML = "<i class='fas fa-check'></i> Aberto";
+            }
+        };
+
+    } catch (e) {
+        alert("Erro ao conectar com o servidor para baixar a Ordem de Serviço.");
+    } finally {
+        setTimeout(() => {
+            btn.innerHTML = textoOriginal;
+            btn.disabled = false;
+        }, 3000);
     }
+}
 
     async function reimprimirNFCe(event, idVenda) {
         const btn = event.currentTarget;
@@ -2987,9 +2656,24 @@
         btn.disabled = false;
     }
 
-    // Limpa dados antigos de versões anteriores. Não restaura login, caixa ou vendas do navegador.
-    document.addEventListener('DOMContentLoaded', function() {
-        limparArmazenamentoLocalAntigo();
+    // Restaura o acesso se o operador fechou a aba por acidente no mesmo dia.
+    document.addEventListener('DOMContentLoaded', async function() {
+        const loginSalvo = obterLoginLocal();
+        if (!loginSalvo) return;
+        try {
+            document.getElementById('tela-login').style.display = 'none';
+            document.getElementById('tela-loading').style.display = 'flex';
+            document.getElementById('login-user').value = loginSalvo.nome;
+            await carregarDados();
+            const sel = document.getElementById('vendedor-select');
+            if (sel && loginSalvo.nome) sel.value = loginSalvo.nome;
+            const caixaRestaurado = restaurarCaixaLocalSeExistir();
+            document.getElementById('tela-loading').style.display = 'none';
+            if (caixaRestaurado) setTimeout(verificarBoletosVencidos, 600);
+        } catch(e) {
+            document.getElementById('tela-loading').style.display = 'none';
+            document.getElementById('tela-login').style.display = 'flex';
+        }
     });
 
           setInterval(() => { if (cxSessao) verificarBoletosVencidos(false); }, 5 * 60 * 1000);
