@@ -585,8 +585,12 @@
     }
 
     function obterIdVendaServidor(v) {
+        // Usa somente campos que representam a venda/pedido.
+        // Não usa o campo genérico "id", porque no Google Sheets ele pode ser apenas o ID da linha
+        // e isso atrapalha a consolidação dos pagamentos da mesma venda.
         return obterCampoTexto(v, [
-            'idVenda','id_venda','id','numeroVenda','nVenda','codigoVenda','codVenda','vendaId','idPedido','idOriginal','pedido'
+            'idVenda','id_venda','numeroVenda','nVenda','codigoVenda','codVenda','vendaId',
+            'idPedido','idOriginal','pedido','pedidoId','numeroPedido','os','numeroOS','cupom'
         ]);
     }
 
@@ -606,22 +610,31 @@
     }
 
     function criarDetalhePagamentoDaLinha(v) {
-        const forma = obterCampoTexto(v, ['formaPagamento','formaPgto','pagamento','metodo','forma','desc','descricao']);
+        const forma = obterCampoTexto(v, [
+            'formaPagamento','formaPgto','pagamento','metodo','forma','formaDePagamento',
+            'tipoPagamento','tipoPgto','bandeira','meioPagamento','desc','descricao'
+        ]);
         const categoria = identificarCategoriaMetodo(forma || v.categoria || v.tipoPagamento || '');
-        let valor = obterNumeroResumo(v, ['valorPagoDia','valorPago','recebido','valorRecebido','valorMetodo','valorForma','valorPagamento','valor']);
+        let valor = obterNumeroResumo(v, [
+            'valorPagoDia','valorPago','recebido','valorRecebido','valorMetodo','valorForma',
+            'valorPagamento','valorMovimento','valorEntrada','valor'
+        ]);
         const totalVenda = obterNumeroResumo(v, ['valorTotalOriginal','totalVenda','valorTotal','total','subtotal']);
-        const valorBoleto = obterNumeroResumo(v, ['valorBoleto','boleto']);
+        const valorBoleto = obterNumeroResumo(v, ['valorBoleto','boleto','valorEmBoleto']);
 
         // Quando a linha é da venda inteira, mas tem boleto separado, não deixa o boleto somar duas vezes.
         if (valorBoleto > 0 && categoria !== 'boleto' && valor >= totalVenda && totalVenda > 0) {
             valor = Math.max(0, valor - valorBoleto);
         }
         if (!valor && totalVenda && categoria !== 'outros') valor = totalVenda;
-        // Se veio como texto misto, exemplo "Dinheiro + PIX", não cria detalhe único.
-        // A função de soma vai ratear somente quando o Apps Script não devolver detalhes por forma.
-        if (forma.includes('+')) return null;
+
         if (!forma && !valor) return null;
         return { nome: forma || categoria || 'Pagamento', valor: tratarValor(valor), categoria };
+    }
+
+    function adicionarDetalheSeValor(lista, nome, valor, categoria) {
+        const v = tratarValor(valor);
+        if (v > 0) lista.push({ nome, valor: v, categoria });
     }
 
     function detalhesPagamentoDaVenda(v) {
@@ -630,12 +643,25 @@
         if (Array.isArray(v.formasPagamentoDetalhadas)) arrays.push(...v.formasPagamentoDetalhadas);
         if (Array.isArray(v.pagamentosDetalhados)) arrays.push(...v.pagamentosDetalhados);
         if (Array.isArray(v.pagamentos)) arrays.push(...v.pagamentos);
+        if (Array.isArray(v.formasPagamento)) arrays.push(...v.formasPagamento);
+        if (Array.isArray(v.meiosPagamento)) arrays.push(...v.meiosPagamento);
 
         const detalhes = arrays.map(m => ({
-            nome: obterCampoTexto(m, ['nome','formaPagamento','formaPgto','pagamento','metodo','forma','desc','descricao','tipo']) || 'Pagamento',
-            valor: obterNumeroResumo(m, ['valor','valorPago','valorRecebido','recebido','total']),
-            categoria: m.categoria || identificarCategoriaMetodo(m.nome || m.formaPagamento || m.formaPgto || m.pagamento || m.metodo || m.forma || m.desc || m.descricao || m.tipo || '')
+            nome: obterCampoTexto(m, ['nome','formaPagamento','formaPgto','pagamento','metodo','forma','formaDePagamento','desc','descricao','tipo','categoria']) || 'Pagamento',
+            valor: obterNumeroResumo(m, ['valor','valorPago','valorRecebido','recebido','total','valorMetodo','valorForma','valorPagamento']),
+            categoria: m.categoria || identificarCategoriaMetodo(m.nome || m.formaPagamento || m.formaPgto || m.pagamento || m.metodo || m.forma || m.formaDePagamento || m.desc || m.descricao || m.tipo || '')
         })).filter(m => tratarValor(m.valor) > 0);
+
+        // Se o Apps Script devolver colunas separadas por forma de pagamento na própria linha,
+        // usa essas colunas. Isso evita jogar tudo em Dinheiro quando Pix/Crédito/Débito já estão no banco.
+        if (!detalhes.length) {
+            adicionarDetalheSeValor(detalhes, 'Dinheiro', obterNumeroResumo(v, ['valorDinheiro','dinheiroValor','vendasDinheiro','dinheiroVendas','pagamentoDinheiro','dinheiro']), 'dinheiro');
+            adicionarDetalheSeValor(detalhes, 'PIX', obterNumeroResumo(v, ['valorPix','valorPIX','pixValor','vendasPix','vendasPIX','pixVendas','pagamentoPix','pix']), 'pix');
+            adicionarDetalheSeValor(detalhes, 'Débito', obterNumeroResumo(v, ['valorDebito','valorDébito','debitoValor','débitoValor','vendasDebito','vendasDébito','debitoVendas','cartaoDebito','cartãoDébito','pagamentoDebito','debito','débito']), 'debito');
+            adicionarDetalheSeValor(detalhes, 'Crédito', obterNumeroResumo(v, ['valorCredito','valorCrédito','creditoValor','créditoValor','vendasCredito','vendasCrédito','creditoVendas','cartaoCredito','cartãoCrédito','pagamentoCredito','credito','crédito']), 'credito');
+            adicionarDetalheSeValor(detalhes, 'Boleto', obterNumeroResumo(v, ['valorBoleto','boletoValor','vendasBoleto','boletoVendas','pagamentoBoleto','boleto']), 'boleto');
+            adicionarDetalheSeValor(detalhes, 'Bonuscred', obterNumeroResumo(v, ['valorBonuscred','bonuscredValor','vendasBonuscred','bonuscred']), 'bonuscred');
+        }
 
         if (!detalhes.length) {
             const detalheLinha = criarDetalhePagamentoDaLinha(v);
@@ -657,9 +683,9 @@
         (lista || []).forEach((v, indice) => {
             if (!v) return;
 
-            // Se o Apps Script devolver idSessao na venda, aceita apenas a sessão atual.
-            // Se não devolver, não bloqueia, mas continua sem usar localStorage.
-            const sessaoVenda = obterCampoTexto(v, ['idSessao','idSessaoCaixa','sessao','caixaSessao']);
+            const sessaoVenda = obterCampoTexto(v, ['idSessao','idSessaoCaixa','sessao','caixaSessao','sessaoCaixa']);
+            // Só filtra por sessão quando a linha realmente trouxer sessão. Se o Apps Script antigo não
+            // gravou idSessao nas vendas, a venda ainda entra pelo filtro de vendedor/data do servidor.
             if (cxSessao && sessaoVenda && sessaoVenda !== cxSessao) return;
 
             const chave = gerarChaveVendaFechamento(v, indice);
@@ -675,7 +701,6 @@
             const atual = mapa.get(chave);
             atual._linhasOrigem += 1;
 
-            // Preserva dados mais completos da venda.
             ['hora','dataHora','data','cliente','nomeCliente','nome','formaPagamento','formaPgto','pagamento','valorTotalOriginal','totalVenda','valorTotal','total','subtotal','valorPagoDia','valorPago','recebido','valorRecebido'].forEach(c => {
                 if ((atual[c] === undefined || atual[c] === null || atual[c] === '') && v[c] !== undefined && v[c] !== null && v[c] !== '') atual[c] = v[c];
             });
@@ -686,6 +711,7 @@
                     valor: tratarValor(m.valor || 0),
                     categoria: m.categoria || identificarCategoriaMetodo(m.nome || m.forma || m.metodo || '')
                 };
+                if (detalhe.valor <= 0) return;
                 const chaveDet = chaveDetalhePagamento(detalhe);
                 if (!atual._detalhesChaves.has(chaveDet)) {
                     atual._detalhesChaves.add(chaveDet);
@@ -701,7 +727,6 @@
     }
 
     function deduplicarVendasFechamento(lista) {
-        // Mantida para compatibilidade: agora consolida pagamentos da mesma venda em vez de descartar linhas.
         return consolidarVendasFechamento(lista);
     }
 
@@ -711,19 +736,19 @@
 
     function identificarCategoriaMetodo(nome) {
         const t = String(nome || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
-        if (t.includes('DINHEIRO')) return 'dinheiro';
+        if (t.includes('DINHEIRO') || t.includes('ESPECIE')) return 'dinheiro';
         if (t.includes('PIX')) return 'pix';
-        if (t.includes('DEBITO') || t.includes('CARTAO DE D') || t.includes('CARTAO D')) return 'debito';
-        if (t.includes('CREDITO') || t.includes('CARTAO DE C') || t.includes('CARTAO C')) return 'credito';
-        if (t.includes('BOLETO')) return 'boleto';
-        if (t.includes('BONUSCRED')) return 'bonuscred';
-        if (t.includes('CARTAO')) return 'credito';
+        if (t.includes('DEBITO') || t.includes('DEB ') || t.includes('CARTAO DE D') || t.includes('CARTAO D')) return 'debito';
+        if (t.includes('CREDITO') || t.includes('CRED ') || t.includes('CARTAO DE C') || t.includes('CARTAO C')) return 'credito';
+        if (t.includes('BOLETO') || t.includes('CARNE') || t.includes('CARNÊ')) return 'boleto';
+        if (t.includes('BONUSCRED') || t.includes('BONUS')) return 'bonuscred';
+        if (t.includes('CARTAO') || t.includes('CARTÃO')) return 'credito';
         return 'outros';
     }
 
     function obterIdSessaoServidor(data) {
         if (!data) return '';
-        return String(data.idSessao || data.idSessaoCaixa || data.sessao || data.caixaSessao || data.id || '').trim();
+        return String(data.idSessao || data.idSessaoCaixa || data.sessao || data.caixaSessao || data.sessaoCaixa || data.idCaixa || data.id || '').trim();
     }
 
     function caixaServidorEstaAberto(data) {
@@ -1035,17 +1060,27 @@
                 imprimirComprovanteSeguro("ABERTURA DE CAIXA", valor, desc, operador);
                 setTimeout(verificarBoletosVencidos, 900);
             } else if (tipoOperacaoAtual === 'sangria' || tipoOperacaoAtual === 'despesa') {
+                if(!cxSessao) {
+                    const statusAtual = await buscarStatusCaixaServidor(operador).catch(() => null);
+                    aplicarStatusCaixaServidor(statusAtual, operador);
+                }
                 if(!cxSessao) { 
-                    alert("Sessão do caixa não identificada."); 
+                    alert("Sessão do caixa não identificada no Google Sheets. Abra o caixa antes de lançar sangria/despesa."); 
                     btn.innerHTML = "Confirmar Lançamento"; 
                     btn.disabled = false; 
                     return; 
                 }
+
                 const ehSangria = tipoOperacaoAtual === 'sangria';
-                const prefixo = ehSangria ? "[SANGRIA] " : "[DESPESA] "; 
+                const prefixo = ehSangria ? "[SANGRIA] " : "[DESPESA] ";
+
+                // RESTAURAÇÃO DE COMPATIBILIDADE:
+                // O Apps Script antigo grava sangria dentro do comando lancar_despesa com prefixo [SANGRIA].
+                // Enviamos também campos extras para versões novas, mas sem trocar para lancar_sangria.
                 const payloadDespesa = {
-                    tipo: ehSangria ? 'lancar_sangria' : 'lancar_despesa',
-                    acao: ehSangria ? 'lancar_sangria' : 'lancar_despesa',
+                    tipo: 'lancar_despesa',
+                    acao: 'lancar_despesa',
+                    categoria: ehSangria ? 'SANGRIA' : 'DESPESA',
                     tipoMovimento: ehSangria ? 'SANGRIA' : 'DESPESA',
                     vendedor: operador,
                     operador: operador,
@@ -1054,20 +1089,12 @@
                     valor: valor,
                     idSessao: cxSessao,
                     idSessaoCaixa: cxSessao,
+                    sessaoCaixa: cxSessao,
                     dataMovimento: dataHojeISO()
                 };
-                let resMov = await enviarDadosServidor(payloadDespesa);
-                let dataMov = await resMov.json().catch(() => ({}));
 
-                // Compatibilidade com Apps Script antigo:
-                // se o backend ainda não tiver 'lancar_sangria', tenta gravar como 'lancar_despesa'
-                // mantendo os campos categoria/tipoMovimento como SANGRIA.
-                if (ehSangria && (dataMov.status === 'Erro' || dataMov.status === 'erro' || dataMov.erro || dataMov.sucesso === false)) {
-                    const payloadCompat = { ...payloadDespesa, tipo: 'lancar_despesa', acao: 'lancar_despesa', categoria: 'SANGRIA', tipoMovimento: 'SANGRIA' };
-                    resMov = await enviarDadosServidor(payloadCompat);
-                    dataMov = await resMov.json().catch(() => ({}));
-                }
-
+                const resMov = await enviarDadosServidor(payloadDespesa);
+                const dataMov = await resMov.json().catch(() => ({}));
                 if (dataMov.status === 'Erro' || dataMov.status === 'erro' || dataMov.erro || dataMov.sucesso === false) {
                     alert(dataMov.mensagem || dataMov.erro || 'Erro ao gravar movimentação no Google Sheets.');
                     return;
@@ -1082,6 +1109,47 @@
         btn.disabled = false;
     }
 
+    function resumoTemConteudoServidor(data) {
+        if (!data || data.status === 'Erro' || data.status === 'erro' || data.erro) return false;
+        const arrays = ['vendasDia','vendasDoDia','vendasDetalhadas','listaVendas','vendas','registrosVendas','vendasFechamento','detalhesVendas','pagamentos','pagamentosDia','movimentacoes','movimentos'];
+        if (arrays.some(k => Array.isArray(data[k]) && data[k].length > 0)) return true;
+        const chaves = ['vendasDinheiro','vendasPix','vendasPIX','vendasDebito','vendasDébito','vendasCredito','vendasCrédito','vendasBoleto','vendasBonuscred','totalVendas','totalVendasDia','totalPix','totalPIX','totalCredito','totalDebito','totalSangrias','sangrias','despesas','saidas'];
+        return chaves.some(k => tratarValor(data[k]) > 0);
+    }
+
+    async function carregarResumoCaixaServidor(operador) {
+        // Sempre atualiza a sessão diretamente no Google Sheets antes de montar o fechamento.
+        const statusAtual = await buscarStatusCaixaServidor(operador).catch(() => null);
+        aplicarStatusCaixaServidor(statusAtual, operador);
+
+        const base = `${URL_BASE_2_PRINCIPAL}?tipo=resumo_caixa&vendedor=${encodeURIComponent(operador)}&data=${encodeURIComponent(dataHojeISO())}`;
+        const tentativas = [];
+        if (cxSessao) {
+            tentativas.push(`${base}&idSessao=${encodeURIComponent(cxSessao)}&idSessaoCaixa=${encodeURIComponent(cxSessao)}&somenteSessao=true&nocache=${Date.now()}`);
+            tentativas.push(`${base}&idSessao=${encodeURIComponent(cxSessao)}&idSessaoCaixa=${encodeURIComponent(cxSessao)}&nocache=${Date.now() + 1}`);
+        }
+        // Fallback 100% Sheets: usado quando as vendas antigas não têm idSessao gravado.
+        tentativas.push(`${base}&somenteDia=true&nocache=${Date.now() + 2}`);
+        tentativas.push(`${base}&nocache=${Date.now() + 3}`);
+
+        let primeiroValido = null;
+        for (const url of tentativas) {
+            try {
+                const res = await fetch(url);
+                const data = await res.json();
+                if (data && !(data.status === 'Erro' || data.status === 'erro' || data.erro)) {
+                    if (!primeiroValido) primeiroValido = data;
+                    if (resumoTemConteudoServidor(data)) return data;
+                } else if (!primeiroValido) {
+                    primeiroValido = data;
+                }
+            } catch(e) {
+                console.warn('Falha ao buscar resumo do caixa:', e);
+            }
+        }
+        return primeiroValido || {};
+    }
+
     async function abrirModalMovimentacao() {
         document.getElementById("dropdown-caixa").classList.remove("show-dropdown"); 
         document.getElementById('modal-movimentacao').style.display = 'flex';
@@ -1090,26 +1158,22 @@
         
         const operador = document.getElementById('vendedor-select').value || document.getElementById('login-user').value;
         try {
-            const statusAtual = await buscarStatusCaixaServidor(operador).catch(() => null);
-            aplicarStatusCaixaServidor(statusAtual, operador);
-            if (!cxSessao) {
-                alert('Não encontrei uma sessão de caixa aberta no Google Sheets para este operador. Abra o caixa novamente pelo sistema para o fechamento puxar apenas dados reais da planilha.');
-                document.getElementById('fech-diferenca').innerText = 'Sem sessão aberta no Google Sheets.';
-                return;
-            }
-            const res = await fetch(`${URL_BASE_2_PRINCIPAL}?tipo=resumo_caixa&vendedor=${encodeURIComponent(operador)}&idSessao=${encodeURIComponent(cxSessao)}&somenteSessao=true&nocache=${Date.now()}`); 
-            const data = await res.json(); 
+            const data = await carregarResumoCaixaServidor(operador);
             tbody.innerHTML = "";
             
-            if(!data.movimentacoes || data.movimentacoes.length === 0) { 
+            const movimentos = Array.isArray(data.movimentacoes) ? data.movimentacoes : (Array.isArray(data.movimentos) ? data.movimentos : []);
+            if(!movimentos.length) { 
                 tbody.innerHTML = "<tr><td colspan='4' style='text-align:center; color:#64748b;'>Nenhuma movimentação no turno atual.</td></tr>"; 
                 return; 
             }
             
-            data.movimentacoes.forEach(m => {
+            movimentos.forEach(m => {
                 const tr = document.createElement('tr'); 
-                const corVal = m.tipo === 'ENTRADA' ? 'var(--green-text)' : 'var(--danger)'; 
-                tr.innerHTML = `<td>${m.hora}</td><td><b style="color:${corVal}">${m.tipo}</b></td><td>${m.desc}</td><td style="font-weight:bold; color:${corVal}">R$ ${m.valor.toLocaleString('pt-br', {minimumFractionDigits: 2})}</td>`; 
+                const tipoTexto = normalizarTextoFechamento(m.tipo || m.tipoMovimento || m.categoria || m.desc || m.descricao);
+                const ehSaida = tipoTexto.includes('SAIDA') || tipoTexto.includes('DESPESA') || tipoTexto.includes('SANGRIA') || tratarValor(m.valor) < 0;
+                const corVal = ehSaida ? 'var(--danger)' : 'var(--green-text)';
+                const valor = Math.abs(tratarValor(m.valor || m.total || m.valorMovimento || 0));
+                tr.innerHTML = `<td>${escaparHTML(m.hora || m.dataHora || '-')}</td><td><b style="color:${corVal}">${escaparHTML(m.tipo || m.tipoMovimento || m.categoria || '-')}</b></td><td>${escaparHTML(m.desc || m.descricao || m.formaPagamento || '-')}</td><td style="font-weight:bold; color:${corVal}">${formatarMoedaBR(valor)}</td>`; 
                 tbody.appendChild(tr);
             });
         } catch(e) { 
@@ -1146,20 +1210,28 @@
     // Função auxiliar para consolidar todas as saídas lidas das movimentações
     function calcularTotalSaidas(resumo) {
         if (!resumo) return 0;
+        const listas = [];
+        ['movimentacoes','movimentos','listaMovimentacoes','despesasDetalhadas','sangriasDetalhadas'].forEach(k => {
+            if (Array.isArray(resumo[k])) listas.push(...resumo[k]);
+        });
+
         let saidasMovimentos = 0;
-        if (Array.isArray(resumo.movimentacoes)) {
-            resumo.movimentacoes.forEach(m => {
-                const tipoMov = String(m.tipo || '').toUpperCase();
-                const descMov = String(m.desc || m.descricao || '').toUpperCase();
-                // Soma tudo que for caracterizado como retirada do caixa
-                if (tipoMov.includes('SAÍDA') || tipoMov.includes('SAIDA') || tipoMov.includes('DESPESA') || tipoMov.includes('SANGRIA') || descMov.includes('[SANGRIA]') || descMov.includes('[DESPESA]')) {
-                    saidasMovimentos += tratarValor(m.valor || m.total || 0);
-                }
-            });
-        }
-        // Usa o maior valor entre o calculado ou o passado solto pelo servidor
-        const saidasObjeto = tratarValor(resumo.despesas) + tratarValor(resumo.sangrias) + tratarValor(resumo.saidas);
-        return saidasMovimentos > saidasObjeto ? saidasMovimentos : saidasObjeto;
+        listas.forEach(m => {
+            const texto = normalizarTextoFechamento([
+                m.tipo, m.tipoMovimento, m.categoria, m.movimento, m.operacao, m.desc, m.descricao
+            ].filter(Boolean).join(' '));
+            const valor = tratarValor(m.valor || m.total || m.valorMovimento || m.valorSaida || 0);
+            const ehSaida = texto.includes('SAIDA') || texto.includes('DESPESA') || texto.includes('SANGRIA') || texto.includes('[DESPESA]') || texto.includes('[SANGRIA]') || valor < 0;
+            const ehAbertura = texto.includes('ABERTURA') || texto.includes('FUNDO') || texto.includes('TROCO INICIAL');
+            if (ehSaida && !ehAbertura) saidasMovimentos += Math.abs(valor);
+        });
+
+        const saidasObjeto =
+            obterNumeroResumo(resumo, ['totalSaidas','saidasTotal','valorSaidas']) +
+            obterNumeroResumo(resumo, ['totalDespesas','despesasTotal','valorDespesas','despesas']) +
+            obterNumeroResumo(resumo, ['totalSangrias','sangriasTotal','valorSangrias','sangrias']);
+
+        return Math.max(saidasMovimentos, saidasObjeto);
     }
     
     function obterNumeroResumo(obj, chaves) {
@@ -1170,31 +1242,62 @@
         return 0;
     }
 
+    function objetoTemAlgumaChave(obj, chaves) {
+        if (!obj) return false;
+        return chaves.some(k => obj[k] !== undefined && obj[k] !== null && obj[k] !== '');
+    }
+
+    function movimentoPareceVenda(m) {
+        if (!m) return false;
+        const texto = normalizarTextoFechamento([
+            m.tipo, m.tipoMovimento, m.categoria, m.movimento, m.operacao, m.desc, m.descricao, m.formaPagamento, m.formaPgto
+        ].filter(Boolean).join(' '));
+        if (texto.includes('SANGRIA') || texto.includes('DESPESA') || texto.includes('SAIDA') || texto.includes('ABERTURA') || texto.includes('FUNDO') || texto.includes('TROCO INICIAL')) return false;
+        if (texto.includes('VENDA') || texto.includes('RECEB') || texto.includes('ENTRADA') || texto.includes('PIX') || texto.includes('CREDITO') || texto.includes('DEBITO') || texto.includes('DINHEIRO') || texto.includes('BOLETO')) return true;
+        return false;
+    }
+
     function obterListaVendasResumo() {
         if (!cxResumoAtual) return [];
-        const possiveis = [
-            cxResumoAtual.vendasDia,
-            cxResumoAtual.vendasDetalhadas,
-            cxResumoAtual.listaVendas,
-            cxResumoAtual.vendas,
-            cxResumoAtual.registrosVendas
+        const gruposPrioritarios = [
+            'vendasDia','vendasDoDia','vendasDetalhadas','listaVendas','vendasFechamento',
+            'registrosVendas','detalhesVendas','vendas'
         ];
-        for (const lista of possiveis) {
+        for (const chave of gruposPrioritarios) {
+            const lista = cxResumoAtual[chave];
             if (Array.isArray(lista) && lista.length > 0) return lista;
         }
-        return [];
+
+        const gruposPagamentos = ['pagamentosDia','pagamentosDetalhados','pagamentos','formasPagamentoDetalhadas','formasPagamento','meiosPagamento'];
+        for (const chave of gruposPagamentos) {
+            const lista = cxResumoAtual[chave];
+            if (Array.isArray(lista) && lista.length > 0) return lista;
+        }
+
+        const movimentos = [];
+        ['movimentacoes','movimentos','listaMovimentacoes'].forEach(k => {
+            if (Array.isArray(cxResumoAtual[k])) movimentos.push(...cxResumoAtual[k]);
+        });
+        const vendasPorMovimento = movimentos.filter(movimentoPareceVenda).map(m => ({
+            ...m,
+            formaPagamento: m.formaPagamento || m.formaPgto || m.pagamento || m.metodo || m.forma || m.desc || m.descricao || m.tipo || 'Entrada',
+            valorPagoDia: obterNumeroResumo(m, ['valorRecebido','valorPago','recebido','valor','total','valorMovimento','valorEntrada']),
+            valorTotalOriginal: obterNumeroResumo(m, ['valorTotalOriginal','totalVenda','valorTotal','total','valor','valorMovimento']),
+            cliente: m.cliente || m.nomeCliente || m.nome || '-'
+        }));
+        return vendasPorMovimento;
     }
 
     function categorizarFormaPagamento(texto) {
         const t = String(texto || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
         const cat = { dinheiro: false, pix: false, debito: false, credito: false, boleto: false, bonuscred: false };
-        if (t.includes('DINHEIRO')) cat.dinheiro = true;
+        if (t.includes('DINHEIRO') || t.includes('ESPECIE')) cat.dinheiro = true;
         if (t.includes('PIX')) cat.pix = true;
-        if (t.includes('BOLETO')) cat.boleto = true;
-        if (t.includes('BONUSCRED')) cat.bonuscred = true;
-        if (t.includes('DEBITO') || t.includes('CARTAO DE D') || t.includes('CARTAO D')) cat.debito = true;
-        if (t.includes('CREDITO') || t.includes('CARTAO DE C') || t.includes('CARTAO C')) cat.credito = true;
-        if (t.includes('CARTAO') && !cat.debito && !cat.credito) cat.credito = true;
+        if (t.includes('BOLETO') || t.includes('CARNE') || t.includes('CARNÊ')) cat.boleto = true;
+        if (t.includes('BONUSCRED') || t.includes('BONUS')) cat.bonuscred = true;
+        if (t.includes('DEBITO') || t.includes('DEB ') || t.includes('CARTAO DE D') || t.includes('CARTAO D')) cat.debito = true;
+        if (t.includes('CREDITO') || t.includes('CRED ') || t.includes('CARTAO DE C') || t.includes('CARTAO C')) cat.credito = true;
+        if ((t.includes('CARTAO') || t.includes('CARTÃO')) && !cat.debito && !cat.credito) cat.credito = true;
         return cat;
     }
 
@@ -1217,10 +1320,10 @@
         });
 
         if (detalhes.length === 0) {
-            const forma = v.formaPagamento || v.formaPgto || v.pagamento || v.metodo || v.desc || v.descricao || '';
+            const forma = v.formaPagamento || v.formaPgto || v.pagamento || v.metodo || v.forma || v.desc || v.descricao || '';
             const totalVenda = obterNumeroResumo(v, ['valorTotalOriginal','totalVenda','valorTotal','total','subtotal']);
             const valorRecebido = obterNumeroResumo(v, ['valorPagoDia','valorPago','recebido','valorRecebido','valorTotal','total','valor']);
-            const valorBoleto = obterNumeroResumo(v, ['valorBoleto','boleto']);
+            const valorBoleto = obterNumeroResumo(v, ['valorBoleto','boleto','valorEmBoleto']);
             const cat = categorizarFormaPagamento(forma);
             let valorBase = valorRecebido || totalVenda || 0;
             let partes = [cat.dinheiro, cat.pix, cat.debito, cat.credito, cat.boleto, cat.bonuscred].filter(Boolean).length || 1;
@@ -1246,10 +1349,10 @@
         const valorRecebidoLinha = somaDetalhes || obterNumeroResumo(v, ['valorPagoDia','valorPago','recebido','valorRecebido','valorTotal','total','valor']);
         const formasLinha = detalhes.length
             ? detalhes.map(m => `${m.nome || m.categoria} ${formatarMoedaBR(m.valor)}`).join(' + ')
-            : (v.formaPagamento || v.formaPgto || v.pagamento || '-');
+            : (v.formaPagamento || v.formaPgto || v.pagamento || v.metodo || '-');
 
         resumo.linhas.push({
-            hora: v.hora || v.dataHora || v.data || '-',
+            hora: v.hora || v.dataHora || v.data || v.timestamp || '-',
             cliente: v.cliente || v.nomeCliente || v.nome || '-',
             forma: formasLinha,
             recebido: valorRecebidoLinha || 0,
@@ -1257,8 +1360,48 @@
         });
     }
 
+    function somarTotaisObjetoPorForma(resumo, obj) {
+        if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
+        let achou = false;
+        Object.keys(obj).forEach(k => {
+            const valor = tratarValor(obj[k]);
+            if (valor <= 0) return;
+            const categoria = identificarCategoriaMetodo(k);
+            if (categoria === 'outros') return;
+            resumo[categoria] += valor;
+            achou = true;
+        });
+        return achou;
+    }
+
+    function aplicarTotaisProntosDoServidor(resumo) {
+        let achou = false;
+        ['formasPagamentoResumo','resumoPagamentos','porFormaPagamento','totaisPorForma','formasPagamento','pagamentosResumo'].forEach(k => {
+            if (somarTotaisObjetoPorForma(resumo, cxResumoAtual[k])) achou = true;
+        });
+
+        if (achou) return true;
+
+        const temChavesSeparadas = objetoTemAlgumaChave(cxResumoAtual, [
+            'pix','PIX','debito','débito','credito','crédito','boleto','bonuscred',
+            'vendasPix','vendasPIX','vendasDebito','vendasDébito','vendasCredito','vendasCrédito','vendasBoleto'
+        ]);
+
+        const dinheiroKeys = ['vendasDinheiro','totalVendasDinheiro','totalDinheiroVendas','dinheiroVendas','valorDinheiroVendas','valorDinheiro'];
+        if (temChavesSeparadas) dinheiroKeys.push('dinheiro');
+
+        resumo.dinheiro = obterNumeroResumo(cxResumoAtual, dinheiroKeys);
+        resumo.pix = obterNumeroResumo(cxResumoAtual, ['vendasPix','vendasPIX','totalVendasPix','totalVendasPIX','totalPix','totalPIX','valorPix','valorPIX','pix']);
+        resumo.debito = obterNumeroResumo(cxResumoAtual, ['vendasDebito','vendasDébito','totalVendasDebito','totalVendasDébito','cartaoDebito','cartãoDébito','totalDebito','totalDébito','valorDebito','valorDébito','debito','débito']);
+        resumo.credito = obterNumeroResumo(cxResumoAtual, ['vendasCredito','vendasCrédito','totalVendasCredito','totalVendasCrédito','cartaoCredito','cartãoCrédito','totalCredito','totalCrédito','valorCredito','valorCrédito','credito','crédito']);
+        resumo.boleto = obterNumeroResumo(cxResumoAtual, ['vendasBoleto','totalVendasBoleto','totalBoleto','valorBoleto','boleto']);
+        resumo.bonuscred = obterNumeroResumo(cxResumoAtual, ['vendasBonuscred','totalVendasBonuscred','totalBonuscred','valorBonuscred','bonuscred']);
+        resumo.outros = obterNumeroResumo(cxResumoAtual, ['vendasOutros','totalVendasOutros','totalOutros','valorOutros']);
+
+        return (resumo.dinheiro + resumo.pix + resumo.debito + resumo.credito + resumo.boleto + resumo.bonuscred + resumo.outros) > 0;
+    }
+
     function calcularResumoPagamentosFechamento() {
-        // 100% Google Sheets/Apps Script. Não usa localStorage e não soma resumo acumulado se houver venda detalhada.
         const vendas = consolidarVendasFechamento(obterListaVendasResumo());
         const resumo = {
             dinheiro: 0,
@@ -1276,15 +1419,7 @@
         if (vendas.length > 0) {
             vendas.forEach(v => somarVendaNoResumo(resumo, v));
         } else {
-            // Só usa totais prontos quando o Apps Script não devolveu lista detalhada de vendas.
-            // Não lê movimentações como venda, porque abertura/sangria/despesa podem contaminar o fechamento.
-            resumo.dinheiro = obterNumeroResumo(cxResumoAtual, ['vendasDinheiro','dinheiro','totalDinheiro']);
-            resumo.pix = obterNumeroResumo(cxResumoAtual, ['vendasPix','pix','vendasPIX','totalPix','totalPIX']);
-            resumo.debito = obterNumeroResumo(cxResumoAtual, ['vendasDebito','debito','cartaoDebito','totalDebito']);
-            resumo.credito = obterNumeroResumo(cxResumoAtual, ['vendasCredito','credito','cartaoCredito','totalCredito']);
-            resumo.boleto = obterNumeroResumo(cxResumoAtual, ['vendasBoleto','boleto','totalBoleto']);
-            resumo.bonuscred = obterNumeroResumo(cxResumoAtual, ['vendasBonuscred','bonuscred','totalBonuscred']);
-            resumo.outros = obterNumeroResumo(cxResumoAtual, ['vendasOutros','outros','totalOutros']);
+            aplicarTotaisProntosDoServidor(resumo);
         }
 
         resumo.total = resumo.dinheiro + resumo.pix + resumo.debito + resumo.credito + resumo.boleto + resumo.bonuscred + resumo.outros;
@@ -1324,33 +1459,33 @@
     async function abrirModalFechamento() {
         document.getElementById("dropdown-caixa").classList.remove("show-dropdown");
 
-        
         // TRAVA DE HORÁRIO REMOVIDA:
         // Agora o fechamento de caixa pode ser aberto em qualquer horário,
         // sem pedir senha Master por causa do horário.
-document.getElementById('modal-fechamento').style.display = 'flex'; 
+        document.getElementById('modal-fechamento').style.display = 'flex'; 
         document.getElementById('fech-informado').value = ""; 
         document.getElementById('fech-diferenca').innerText = "Calculando servidor..."; 
         document.getElementById('btn-confirma-fechamento').disabled = true;
 
         const operador = document.getElementById('vendedor-select').value || document.getElementById('login-user').value;
         try {
-            const res = await fetch(`${URL_BASE_2_PRINCIPAL}?tipo=resumo_caixa&vendedor=${encodeURIComponent(operador)}&idSessao=${encodeURIComponent(cxSessao)}&somenteSessao=true&nocache=${Date.now()}`); 
-            cxResumoAtual = await res.json();
+            cxResumoAtual = await carregarResumoCaixaServidor(operador);
             
             if(cxResumoAtual.status === "Erro" || cxResumoAtual.erro) { 
-                alert("⚠️ O servidor não reconheceu o comando."); 
+                alert("⚠️ O servidor não reconheceu o comando de resumo_caixa."); 
                 document.getElementById('fech-diferenca').innerText = "Erro do Servidor."; 
                 return; 
             }
+
+            const idServidorResumo = obterIdSessaoServidor(cxResumoAtual);
+            if (!cxSessao && idServidorResumo) cxSessao = idServidorResumo;
+            cxFundoInicial = tratarValor(cxResumoAtual.valorInicial || cxResumoAtual.fundoInicial || cxResumoAtual.abertura || cxResumoAtual.valorAbertura || cxFundoInicial || 0);
             
             const resumoPgto = atualizarTelaResumoFechamento();
             cxResumoAtual.resumoPagamentosFechamento = resumoPgto;
             
-            // CORREÇÃO: Aplica a nova função inteligente para somar as saídas
             const saidas = calcularTotalSaidas(cxResumoAtual); 
-            
-            const dinheiroDia = tratarValor(resumoPgto.dinheiro || cxResumoAtual.vendasDinheiro || 0);
+            const dinheiroDia = tratarValor(resumoPgto.dinheiro || 0);
             const saldoEsperado = cxFundoInicial + dinheiroDia - saidas;
             
             document.getElementById('fech-fundo').innerText = formatarMoedaBR(cxFundoInicial); 
@@ -1362,6 +1497,7 @@ document.getElementById('modal-fechamento').style.display = 'flex';
             document.getElementById('fech-diferenca').innerText = "Informe o valor em gaveta acima"; 
             document.getElementById('btn-confirma-fechamento').disabled = false;
         } catch (e) { 
+            console.error(e);
             document.getElementById('fech-diferenca').innerText = "Erro ao buscar dados do servidor."; 
         }
     }
@@ -2491,7 +2627,11 @@ document.getElementById('modal-fechamento').style.display = 'flex';
             valorBoleto: valorBoleto,
             diaVencimentoBoleto: vendaComBoleto ? diaVencimentoBoleto : '',
             vencimentoBoletoEscolhido: vendaComBoleto ? `Dia ${diaVencimentoBoleto}` : '',
-            idVenda: "AMMO-" + Date.now(), 
+            idVenda: "AMMO-" + Date.now(),
+            idSessao: cxSessao,
+            idSessaoCaixa: cxSessao,
+            sessaoCaixa: cxSessao,
+            dataVenda: dataHojeISO(),
             emitirNotaFiscal: emitirNF,
             boletoEntradaMinima50: vendaComBoleto ? (totalVendaFinal * 0.50) : 0,
             boletoEntradaInformada: vendaComBoleto ? (totalPago - valorBoleto) : totalPago,
